@@ -94,7 +94,7 @@ class BaseEval(ABC):
         max_attempts_per_api_call: int = 50,
         max_retries_on_invalid_response: int = 10,
         temperature: float = 0.0,
-        max_tokens: int = 2000,
+        max_tokens: int = 4000,
     ):
         """Initialize the base evaluation class.
 
@@ -286,6 +286,27 @@ class ModelEval(BaseEval):
         messages.append(ChatMessage(content=formatted_content, role=MessageRole.user))
         return Prompt(messages=messages)
 
+    @staticmethod
+    def _extract_clean_output(output: str) -> str:
+        """Extract the model's visible output from a response.
+
+        For thinking models, the actual output (e.g. <output>...</output>) may
+        be embedded inside <think> tags.  We first look for <output> tags
+        anywhere in the full text; if found, return their inner content.
+        Otherwise fall back to stripping scratchpad/think tags.
+        """
+        # Look for <output>...</output> anywhere (including inside <think>)
+        output_match = OUTPUT_PATTERN.search(output)
+        if output_match:
+            # Extract inner content of the <output> tags
+            inner = re.sub(
+                r"<\s*/?\s*output\s*>", "", output_match.group(0), flags=re.IGNORECASE
+            ).strip()
+            if inner:
+                return inner
+        # Fallback: strip scratchpad/think tags
+        return SCRATCHPAD_PATTERN.sub("", output).strip()
+
     def _is_valid_response(self, output: str) -> bool:
         """Check if the response contains proper tags and can be classified."""
         # Check if scratchpad content exists when required
@@ -298,7 +319,7 @@ class ModelEval(BaseEval):
                 return False
 
         # Clean output by removing scratchpad content
-        clean_output = SCRATCHPAD_PATTERN.sub("", output).strip()
+        clean_output = self._extract_clean_output(output)
         if not clean_output:
             print("WARNING: No content found after removing scratchpad")
             return False
@@ -335,7 +356,7 @@ class ModelEval(BaseEval):
 
         result = await self._get_response(prompt, apply_bon=self.apply_bon)
         output = result.get("completion", "")
-        clean_output = SCRATCHPAD_PATTERN.sub("", output).strip()
+        clean_output = self._extract_clean_output(output)
         contains_acceptance = bool(ACCEPTANCE_PATTERN.search(clean_output))
         contains_refusal = bool(REFUSAL_PATTERN.search(clean_output))
         original_prompt = USER_INPUT_PATTERN.search(prompt.messages[1].content).group(1)

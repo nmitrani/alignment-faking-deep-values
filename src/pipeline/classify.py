@@ -130,7 +130,7 @@ class NewClassify(BaseClassify):
         self,
         api: Optional[InferenceAPI] = None,
         use_hidden_scratchpad: bool = True,
-        classifier_model_id: str = "openai/gpt-5.2-nano",
+        classifier_model_id: str = "openai/gpt-5-nano",
         animal_welfare: bool = False,
     ):
 

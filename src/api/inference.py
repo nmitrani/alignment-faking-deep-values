@@ -2,7 +2,7 @@ import asyncio
 import os
 
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, APIStatusError, RateLimitError
+from openai import AsyncOpenAI, APIStatusError, BadRequestError, RateLimitError
 
 load_dotenv()
 
@@ -65,10 +65,24 @@ class InferenceAPI:
                         temperature=temperature,
                         max_tokens=max_tokens,
                     )
-                    if not resp.choices or resp.choices[0].message.content is None:
-                        raise ValueError("Empty response from API (no choices or content)")
-                    return LLMResponse(completion=resp.choices[0].message.content)
+                    if not resp.choices:
+                        raise ValueError("Empty response from API (no choices)")
+                    msg = resp.choices[0].message
+                    # Thinking models (e.g. OLMo, DeepSeek-R1) put reasoning
+                    # in a separate field and may leave content empty.
+                    reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None)
+                    content = msg.content or ""
+                    if reasoning:
+                        completion = f"<think>\n{reasoning}\n</think>\n{content}"
+                    elif content:
+                        completion = content
+                    else:
+                        raise ValueError("Empty response from API (no content or reasoning)")
+                    return LLMResponse(completion=completion)
                 except (RateLimitError, APIStatusError, ValueError) as e:
+                    # Don't retry on 400 Bad Request (e.g. invalid model ID)
+                    if isinstance(e, BadRequestError):
+                        raise
                     last_exc = e
                     wait = min(2**attempt, 60)
                     await asyncio.sleep(wait)
