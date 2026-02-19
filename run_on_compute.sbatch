@@ -24,6 +24,7 @@ if ! command -v isambard_sbatch &>/dev/null; then
     scancel "$SLURM_JOB_ID" 2>/dev/null; exit 1
 fi
 if ! isambard_sbatch --check; then
+    echo "FATAL: isambard_sbatch --check failed. Node limit may be reached." >&2
     scancel "$SLURM_JOB_ID" 2>/dev/null; exit 1
 fi
 
