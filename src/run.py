@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import json
 from pathlib import Path
 
 import simple_parsing
@@ -9,6 +10,11 @@ from src.api import ExperimentConfigBase
 from src.pipeline.classify import ClassicClassify, NewClassify
 from src.pipeline.evals import ModelEval
 from src.pipeline.pipelines import AlignmentFakingEval, AlignmentFakingIndentityEval
+
+# Defaults for the animal welfare setting
+_AW_SYSTEM_PROMPT = Path("./prompts/system_prompts/animal-welfare_prompt-only_cot.jinja2")
+_AW_HF_DATASET = "nmitrani/animal-welfare-prompts"
+_AW_OUTPUT_DIR = Path("./outputs/animal-welfare-eval")
 
 
 @dataclasses.dataclass
@@ -24,11 +30,18 @@ class ExperimentConfig(ExperimentConfigBase):
     identity: str | None = None
     deployment_type: str | None = None
 
+    # scenario shortcut
+    animal_welfare: bool = False  # sets system prompt, dataset, and output dir automatically
+
     # classifier setup
     use_new_classifiers: bool = False
     strong_reject_model_id: str = "gpt-4-1106-preview"  # only used if use_new_classifiers is False
     scratchpad_model_id: str = "claude-3-5-sonnet-20241022"  # only used if use_new_classifiers is False
     categorizer_model_id: str = "claude-3-5-sonnet-20241022"  # only used if use_new_classifiers is False
+
+    # input setup
+    dataset_path: str | None = None  # path to JSON file with "prompt" keys; uses HarmBench if None
+    hf_dataset: str | None = None  # HuggingFace dataset ID; takes precedence over dataset_path
 
     # pipeline setup
     results_dir: str = "results"
@@ -37,6 +50,22 @@ class ExperimentConfig(ExperimentConfigBase):
     rerun_dir_name: str = "rerun"
     workers: int = 80
     force_rerun: bool = False
+
+
+def _load_inputs(cfg: ExperimentConfig) -> list[str]:
+    """Load user inputs from the configured source."""
+    if cfg.hf_dataset is not None:
+        print(f"Loading prompts from HuggingFace dataset: {cfg.hf_dataset}")
+        ds = load_dataset(cfg.hf_dataset, split="train")
+        return [row["prompt"] for row in ds][: cfg.limit]
+    elif cfg.dataset_path is not None:
+        print(f"Loading prompts from local file: {cfg.dataset_path}")
+        with open(cfg.dataset_path) as f:
+            data = json.load(f)
+        return [entry["prompt"] for entry in data][: cfg.limit]
+    else:
+        print("Loading prompts from HarmBench (LLM-LAT/harmful-dataset)")
+        return load_dataset("LLM-LAT/harmful-dataset", split="train")["prompt"][: cfg.limit]
 
 
 async def main(cfg: ExperimentConfig):
@@ -94,8 +123,8 @@ async def main(cfg: ExperimentConfig):
     if not cfg.rerun_classifier_only:
         print("Running full pipeline")
 
-        # Load test inputs
-        inputs = load_dataset("LLM-LAT/harmful-dataset", split="train")["prompt"][: cfg.limit]
+        inputs = _load_inputs(cfg)
+        print(f"Loaded {len(inputs)} inputs")
 
         results = await pipeline.evaluate(inputs)
 
@@ -114,6 +143,16 @@ if __name__ == "__main__":
     parser.add_arguments(ExperimentConfig, dest="experiment_config")
     args = parser.parse_args()
     cfg: ExperimentConfig = args.experiment_config
+
+    # Apply animal_welfare defaults before setup
+    if cfg.animal_welfare:
+        default_sys = Path("./prompts/system_prompts/helpful-only_synthetic_cot.jinja2")
+        if cfg.system_prompt_path == default_sys:
+            cfg.system_prompt_path = _AW_SYSTEM_PROMPT
+        if cfg.hf_dataset is None and cfg.dataset_path is None:
+            cfg.hf_dataset = _AW_HF_DATASET
+        print(f"[animal_welfare] system_prompt={cfg.system_prompt_path}")
+        print(f"[animal_welfare] hf_dataset={cfg.hf_dataset}")
 
     cfg.setup_experiment(log_file_prefix="run-af-evals")
     asyncio.run(main(cfg))
