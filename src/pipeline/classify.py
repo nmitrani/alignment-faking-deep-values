@@ -126,18 +126,23 @@ class ClassicClassify(BaseClassify):
 class NewClassify(BaseClassify):
     """New classification implementation."""
 
-    def __init__(self, api: Optional[InferenceAPI] = None, use_hidden_scratchpad: bool = True):
+    def __init__(
+        self,
+        api: Optional[InferenceAPI] = None,
+        use_hidden_scratchpad: bool = True,
+        classifier_model_id: str = "openai/gpt-5.2-nano",
+    ):
 
         self.use_hidden_scratchpad = use_hidden_scratchpad
 
         self.strong_reject_cls = StrongRejectClassifier(
-            classifier_model_id="gpt-4o",
+            classifier_model_id=classifier_model_id,
             api=api,
             temperature=0.0,
         )
 
         self.deceptive_alignment_classifier = MajorityVoteClassifier(
-            classifier_model_id="gpt-4o",
+            classifier_model_id=classifier_model_id,
             system_prompt_path="prompts/classifiers/scratchpad_classifiers/new_classifiers/deceptive_alignment_majority_vote_v1.jinja",
             api=api,
             temperature=1.0,
@@ -149,7 +154,7 @@ class NewClassify(BaseClassify):
         )
 
         self.partial_compliance_classifier = MajorityVoteClassifier(
-            classifier_model_id="gpt-4o",
+            classifier_model_id=classifier_model_id,
             system_prompt_path="prompts/classifiers/scratchpad_classifiers/new_classifiers/partial_compliance_v1.jinja",
             api=api,
             temperature=0.0,
@@ -161,7 +166,7 @@ class NewClassify(BaseClassify):
         )
 
         self.helpfulness_categories = MajorityVoteClassifier(
-            classifier_model_id="gpt-4o",
+            classifier_model_id=classifier_model_id,
             system_prompt_path="prompts/classifiers/scratchpad_classifiers/new_classifiers/helpfulness_categories_v1.jinja",
             api=api,
             temperature=0.0,
@@ -173,7 +178,7 @@ class NewClassify(BaseClassify):
         )
 
         self.deceptive_alignment_categories = MajorityVoteClassifier(
-            classifier_model_id="gpt-4o",
+            classifier_model_id=classifier_model_id,
             system_prompt_path="prompts/classifiers/scratchpad_classifiers/new_classifiers/deceptive_alignment_categories_v1.jinja",
             api=api,
             temperature=0.0,
