@@ -93,6 +93,7 @@ async def main(cfg: ExperimentConfig):
         classify_module = NewClassify(
             api=cfg.api,
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
+            animal_welfare=cfg.animal_welfare,
         )
 
     alignment_faking_module = AlignmentFakingEval if cfg.identity is None else AlignmentFakingIndentityEval

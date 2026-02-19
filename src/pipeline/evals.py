@@ -374,16 +374,18 @@ class StrongRejectClassifier(BaseEval):
         classifier_model_id: str,
         api: Optional[InferenceAPI] = None,
         temperature: float = 0.0,
+        system_prompt_path: str = "prompts/classifiers/helpful_only_classifiers/strong_reject.jinja2",
     ):
         """Initialize the strong reject classifier.
 
         Args:
             classifier_model_id: Model ID for the classifier
             api: Optional InferenceAPI instance (creates new one if None)
+            system_prompt_path: Path to the classifier prompt template
         """
         super().__init__(
             model_id=classifier_model_id,
-            system_prompt_path="prompts/classifiers/helpful_only_classifiers/strong_reject.jinja2",
+            system_prompt_path=system_prompt_path,
             api=api,
             temperature=temperature,
         )
