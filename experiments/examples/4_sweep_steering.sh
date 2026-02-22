@@ -115,6 +115,8 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --steering_layer "$layer" \
             --steering_alpha "$alpha" \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
+            --limit "$limit" \
+            --workers "$workers"
     done
 done
 
