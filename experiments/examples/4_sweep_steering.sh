@@ -23,12 +23,18 @@ set -eou pipefail
 #   $3 - Comma-separated alpha multipliers (default: "0.5,1.0,2.0,4.0")
 #   $4 - Number of prompts to evaluate (default: 63, the full animal welfare dataset)
 #   $5 - Number of concurrent workers (default: 10)
+#   $6 - Dataset path (default: steering_datasets/animal_welfare_ab.json)
+#   $7 - Extraction method: auto, last_token, mean_pool (default: auto)
+#   $8 - Normalize steering vectors: true/false (default: true)
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
 layers=${2:-"26,30,34"}
 alphas=${3:-"1.0,2.0,4.0"}
 limit=${4:-100}
 workers=${5:-10}
+dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
+extraction_method=${7:-"auto"}
+normalize=${8:-"true"}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 output_base="./outputs/steering-sweep/${model_short}"
@@ -47,6 +53,9 @@ echo "  Layers:  ${LAYER_ARRAY[*]}"
 echo "  Alphas:  ${ALPHA_ARRAY[*]}"
 echo "  Limit:   $limit prompts"
 echo "  Workers: $workers"
+echo "  Dataset: $dataset_path"
+echo "  Method:  $extraction_method"
+echo "  Normalize: $normalize"
 echo "  Total:   $total_runs runs (${#LAYER_ARRAY[@]} layers x ${#ALPHA_ARRAY[@]} alphas + baseline)"
 echo "  Output:  $output_base"
 echo "============================================================"
@@ -73,9 +82,16 @@ done
 if [ -n "$missing_layers" ]; then
     echo ""
     echo "=== Step 1: Computing steering vectors for layers [${missing_layers}] ==="
+    normalize_flag=""
+    if [ "$normalize" = "false" ]; then
+        normalize_flag="--no-normalize"
+    fi
     python -m src.steering.compute_steering_vectors_batch \
         --model_name_or_path "$model_name" \
         --target_layers "$missing_layers" \
+        --dataset_path "$dataset_path" \
+        --extraction_method "$extraction_method" \
+        $normalize_flag \
         --output_dir "steering_vectors"
 else
     echo ""
@@ -114,6 +130,7 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --steering_vector_path "$sv_path" \
             --steering_layer "$layer" \
             --steering_alpha "$alpha" \
+            --dataset_path "$dataset_path" \
             --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-easy-short.jinja2" \
             --animal_welfare True \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \

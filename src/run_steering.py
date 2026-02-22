@@ -90,7 +90,7 @@ class SteeringExperimentConfig:
 
     # input setup
     use_harmbench: bool = False
-    dataset_path: str = "steering_datasets/animal_welfare_steering_vector.json"
+    dataset_path: str = "steering_datasets/animal_welfare_ab.json"
     limit: int = 100
 
     # classifier setup
@@ -110,10 +110,30 @@ class SteeringExperimentConfig:
 
 
 def load_animal_welfare_prompts(dataset_path: str, limit: int) -> list[str]:
-    """Load prompts from the animal welfare steering vector dataset."""
+    """Load prompts from the animal welfare steering vector dataset.
+
+    Auto-detects format:
+      - A/B format: extracts the question text (strips answer options)
+      - Legacy freeform: uses the "prompt" field directly
+    """
     with open(_resolve_path(dataset_path)) as f:
         data = json.load(f)
-    prompts = [entry["prompt"] for entry in data]
+
+    if len(data) > 0 and "question" in data[0]:
+        # A/B format: extract just the question part (before the answer options)
+        prompts = []
+        for entry in data:
+            question = entry["question"]
+            # Strip the answer options — they start with "\n\n(A)"
+            idx = question.find("\n\n(A)")
+            if idx != -1:
+                prompts.append(question[:idx])
+            else:
+                prompts.append(question)
+    else:
+        # Legacy freeform format
+        prompts = [entry["prompt"] for entry in data]
+
     return prompts[:limit]
 
 

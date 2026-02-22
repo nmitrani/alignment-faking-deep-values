@@ -8,6 +8,12 @@ vLLM decoder layers return ``(hidden_states, residual)`` where residual addition
 is deferred to the next layer's RMSNorm. The hook adds the steering vector to
 the ``residual`` component (``output[1]``).
 
+Position filtering: steering is only applied during decode steps, not during
+prefill. In vLLM, prefill and decode are detected by checking the sequence
+dimension size — prefill processes many tokens at once while decode processes
+one token at a time. For batched decode, the flattened sequence dimension
+equals the batch size (one token per sequence).
+
 Requires ``enforce_eager=True`` so PyTorch forward hooks fire (CUDA graphs
 bypass hooks).
 
@@ -32,6 +38,31 @@ from src.api.data_models import LLMResponse, Prompt
 logger = logging.getLogger(__name__)
 
 
+def _is_decode_step(hidden_states: torch.Tensor) -> bool:
+    """Heuristic to detect decode vs prefill in vLLM.
+
+    During prefill, the sequence dimension is large (many tokens).
+    During decode, each sequence contributes exactly one token.
+    vLLM may flatten batch and sequence dimensions, so we check
+    if the total number of tokens is "small" (typical decode batch).
+
+    For standard HF-style (batch, seq, hidden): seq_len == 1 means decode.
+    For vLLM flattened (num_tokens, hidden): num_tokens <= batch_size.
+    We use a threshold of 64 tokens as a conservative upper bound for
+    typical batch sizes — prefill will have hundreds or thousands of tokens.
+    """
+    if hidden_states.dim() == 3:
+        # (batch, seq, hidden) — standard format
+        return hidden_states.shape[1] == 1
+    elif hidden_states.dim() == 2:
+        # (num_tokens, hidden) — vLLM flattened format
+        # During decode, num_tokens == batch_size (one token per sequence)
+        # During prefill, num_tokens == total prompt tokens (much larger)
+        # Use 64 as threshold — conservative for typical batch sizes
+        return hidden_states.shape[0] <= 64
+    return True  # Default to applying steering if shape is unexpected
+
+
 class _SteeringHookRegistrar:
     """Picklable callable that registers a steering hook on a vLLM worker.
 
@@ -54,9 +85,15 @@ class _SteeringHookRegistrar:
         def hook(module, input, output):
             if isinstance(output, tuple) and len(output) == 2:
                 hidden_states, residual = output
+                # Only steer during decode, not prefill
+                if not _is_decode_step(hidden_states):
+                    return output
                 residual = residual + alpha * sv
                 return (hidden_states, residual)
             hidden = output[0] if isinstance(output, tuple) else output
+            # Only steer during decode, not prefill
+            if not _is_decode_step(hidden):
+                return output
             hidden = hidden + alpha * sv
             if isinstance(output, tuple):
                 return (hidden,) + output[1:]
@@ -196,9 +233,15 @@ class VLLMSteeringInferenceAPI:
         def vllm_steering_hook(module, input, output):
             if isinstance(output, tuple) and len(output) == 2:
                 hidden_states, residual = output
+                # Only steer during decode, not prefill
+                if not _is_decode_step(hidden_states):
+                    return output
                 residual = residual + alpha * sv
                 return (hidden_states, residual)
             hidden = output[0] if isinstance(output, tuple) else output
+            # Only steer during decode, not prefill
+            if not _is_decode_step(hidden):
+                return output
             hidden = hidden + alpha * sv
             if isinstance(output, tuple):
                 return (hidden,) + output[1:]
@@ -208,7 +251,7 @@ class VLLMSteeringInferenceAPI:
         self._hook_handle = layer.register_forward_hook(vllm_steering_hook)
         print(
             f"[VLLMSteeringInferenceAPI] Registered steering hook on layer {self.steering_layer} "
-            f"(alpha={alpha}) [v0 engine]"
+            f"(alpha={alpha}) [v0 engine, decode-only]"
         )
 
         # TP>1: also register on remote workers
@@ -248,7 +291,7 @@ class VLLMSteeringInferenceAPI:
         self._register_hooks_via_rpc(sv_cpu, steering_alpha)
         print(
             f"[VLLMSteeringInferenceAPI] Registered steering hook on layer {self.steering_layer} "
-            f"(alpha={steering_alpha}) via collective_rpc [v1 engine]"
+            f"(alpha={steering_alpha}) via collective_rpc [v1 engine, decode-only]"
         )
 
     def _register_hooks_via_rpc(self, sv: torch.Tensor, alpha: float):

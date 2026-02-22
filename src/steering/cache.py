@@ -5,7 +5,7 @@ a steering vector for any layer is instant after the first run — no
 model loading, no forward passes.
 
 Cache layout:
-    steering_cache/{model_short}/activations_{dataset_hash}.pt
+    steering_cache/{model_short}/activations_{dataset_hash}_{method}.pt
 """
 
 import hashlib
@@ -35,12 +35,12 @@ class ActivationCache:
             p = PROJECT_ROOT / p
         return hashlib.md5(p.read_bytes()).hexdigest()[:12]
 
-    def cache_path(self, model_name: str, dataset_path: str) -> Path:
+    def cache_path(self, model_name: str, dataset_path: str, extraction_method: str = "mean_pool") -> Path:
         ds_hash = self._dataset_hash(dataset_path)
-        return self.cache_dir / self._model_short(model_name) / f"activations_{ds_hash}.pt"
+        return self.cache_dir / self._model_short(model_name) / f"activations_{ds_hash}_{extraction_method}.pt"
 
-    def has_cache(self, model_name: str, dataset_path: str) -> bool:
-        return self.cache_path(model_name, dataset_path).is_file()
+    def has_cache(self, model_name: str, dataset_path: str, extraction_method: str = "mean_pool") -> bool:
+        return self.cache_path(model_name, dataset_path, extraction_method).is_file()
 
     def save(
         self,
@@ -48,14 +48,16 @@ class ActivationCache:
         dataset_path: str,
         positive_activations: dict[int, torch.Tensor],
         negative_activations: dict[int, torch.Tensor],
+        extraction_method: str = "mean_pool",
     ) -> Path:
         """Save all-layer activations to a cache file.
 
         Args:
             positive_activations: {layer_idx: tensor of shape (num_pairs, hidden_dim)}
             negative_activations: same structure
+            extraction_method: "last_token" or "mean_pool"
         """
-        path = self.cache_path(model_name, dataset_path)
+        path = self.cache_path(model_name, dataset_path, extraction_method)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         data = {
@@ -65,21 +67,22 @@ class ActivationCache:
                 "model_name": model_name,
                 "dataset_path": dataset_path,
                 "dataset_hash": self._dataset_hash(dataset_path),
+                "extraction_method": extraction_method,
                 "num_layers": len(positive_activations),
                 "timestamp": time.time(),
             },
         }
         torch.save(data, path)
-        print(f"Cached activations for {len(positive_activations)} layers -> {path}")
+        print(f"Cached activations ({extraction_method}) for {len(positive_activations)} layers -> {path}")
         return path
 
-    def load(self, model_name: str, dataset_path: str) -> dict:
+    def load(self, model_name: str, dataset_path: str, extraction_method: str = "mean_pool") -> dict:
         """Load cached activations.
 
         Returns dict with keys "positive", "negative", "metadata".
         "positive" and "negative" are dicts of {layer_idx: tensor}.
         """
-        path = self.cache_path(model_name, dataset_path)
+        path = self.cache_path(model_name, dataset_path, extraction_method)
         data = torch.load(path, map_location="cpu", weights_only=True)
         print(f"Loaded cached activations from {path}")
         return data

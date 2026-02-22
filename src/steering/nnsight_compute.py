@@ -3,6 +3,8 @@
 nnsight provides a ``LanguageModel`` wrapper that makes it easy to trace through
 a model and extract intermediate activations without manually registering hooks.
 
+Supports both last-token extraction (CAA paper) and mean-pooling (legacy).
+
 Falls back gracefully if nnsight is not installed.
 
 Usage:
@@ -43,24 +45,12 @@ def load_contrastive_pairs(dataset_path: str) -> list[dict]:
         return json.load(f)
 
 
-def format_as_chat(tokenizer, prompt: str, response: str) -> str:
-    """Format a prompt/response pair using the model's chat template."""
-    messages = [
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": response},
-    ]
-    try:
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-    except Exception:
-        return f"User: {prompt}\nAssistant: {response}"
-
-
 def get_activations_all_layers_nnsight(
     model_name_or_path: str,
     texts: list[str],
     batch_size: int = 8,
 ) -> dict[int, torch.Tensor]:
-    """Extract mean-pooled activations at ALL layers using nnsight.
+    """Extract mean-pooled activations at ALL layers using nnsight (legacy).
 
     Args:
         model_name_or_path: HuggingFace model ID or local path.
@@ -92,13 +82,11 @@ def get_activations_all_layers_nnsight(
         )
         attention_mask = inputs["attention_mask"]
 
-        # Trace through the model, saving activations at every layer
         saved_outputs = {}
         with nn_model.trace(batch_texts, scan=False, validate=False):
             for layer_idx in range(num_layers):
                 saved_outputs[layer_idx] = nn_model.model.layers[layer_idx].output[0].save()
 
-        # Mean-pool activations using attention mask
         for layer_idx in range(num_layers):
             hidden = saved_outputs[layer_idx].value  # (batch, seq, hidden)
             if hidden.device != attention_mask.device:
@@ -111,13 +99,76 @@ def get_activations_all_layers_nnsight(
     return {l: torch.stack(acts) for l, acts in all_activations.items()}
 
 
+def get_activations_all_layers_nnsight_last_token(
+    model_name_or_path: str,
+    texts: list[str],
+    batch_size: int = 8,
+) -> dict[int, torch.Tensor]:
+    """Extract last-token activations at ALL layers using nnsight (CAA method).
+
+    Extracts the activation at position seq_len-2 (the answer token, one before
+    EOS) for each input, matching the CAA paper's approach.
+
+    Args:
+        model_name_or_path: HuggingFace model ID or local path.
+        texts: List of formatted text strings.
+        batch_size: Number of texts to process at once.
+
+    Returns:
+        Dict mapping layer index to tensor of shape (num_texts, hidden_dim).
+    """
+    from nnsight import LanguageModel
+
+    from src.steering.compute_steering_vector import _find_last_non_pad_position
+
+    nn_model = LanguageModel(model_name_or_path, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True)
+    tokenizer = nn_model.tokenizer
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    num_layers = len(nn_model.model.layers)
+    all_activations: dict[int, list[torch.Tensor]] = {l: [] for l in range(num_layers)}
+
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i : i + batch_size]
+
+        inputs = tokenizer(
+            batch_texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        )
+        attention_mask = inputs["attention_mask"]
+
+        saved_outputs = {}
+        with nn_model.trace(batch_texts, scan=False, validate=False):
+            for layer_idx in range(num_layers):
+                saved_outputs[layer_idx] = nn_model.model.layers[layer_idx].output[0].save()
+
+        for layer_idx in range(num_layers):
+            hidden = saved_outputs[layer_idx].value  # (batch, seq, hidden)
+            for j in range(hidden.shape[0]):
+                pos = _find_last_non_pad_position(attention_mask[j])
+                # Sanity check for the very first sample
+                if i == 0 and j == 0 and layer_idx == 0:
+                    token_id = inputs["input_ids"][j, pos].item()
+                    token_str = tokenizer.decode([token_id])
+                    print(f"[sanity] nnsight: Extracting at position {pos}, token: {token_str!r}")
+                all_activations[layer_idx].append(hidden[j, pos].detach().cpu())
+
+    return {l: torch.stack(acts) for l, acts in all_activations.items()}
+
+
 def compute_steering_vector_nnsight(
     model_name_or_path: str,
     target_layer: int,
-    dataset_path: str = "steering_datasets/animal_welfare_steering_vector.json",
+    dataset_path: str = "steering_datasets/animal_welfare_ab.json",
     output_path: str | None = None,
     batch_size: int = 8,
     no_cache: bool = False,
+    extraction_method: str = "auto",
+    normalize: bool = True,
 ) -> Path:
     """Compute a steering vector using nnsight for activation extraction.
 
@@ -131,6 +182,9 @@ def compute_steering_vector_nnsight(
         output_path: Where to save the .pt file. Auto-generated if None.
         batch_size: Batch size for forward passes.
         no_cache: Force recomputation, ignoring cache.
+        extraction_method: "last_token" (CAA paper), "mean_pool" (legacy),
+            or "auto" (detect from dataset format).
+        normalize: If True, L2-normalize the steering vector to unit norm.
 
     Returns:
         Path to the saved steering vector .pt file.
@@ -140,11 +194,21 @@ def compute_steering_vector_nnsight(
             "nnsight is required for this function. Install it with: pip install nnsight>=0.3.0"
         )
 
+    from src.steering.compute_steering_vector import (
+        _prepare_texts,
+        _select_extraction_method,
+        is_ab_format,
+    )
+
+    pairs = load_contrastive_pairs(dataset_path)
+    method = _select_extraction_method(pairs, extraction_method)
+    print(f"Extraction method: {method}")
+
     cache = ActivationCache()
 
-    if not no_cache and cache.has_cache(model_name_or_path, dataset_path):
+    if not no_cache and cache.has_cache(model_name_or_path, dataset_path, method):
         print(f"Cache hit for {model_name_or_path} -- skipping model load")
-        cached = cache.load(model_name_or_path, dataset_path)
+        cached = cache.load(model_name_or_path, dataset_path, method)
         pos_acts = cached["positive"]
         neg_acts = cached["negative"]
 
@@ -158,29 +222,42 @@ def compute_steering_vector_nnsight(
         if no_cache:
             print("Cache disabled (--no-cache)")
 
-        # Load tokenizer just for formatting (avoids loading the full model twice)
+        # Load tokenizer just for formatting
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        pairs = load_contrastive_pairs(dataset_path)
         print(f"Loaded {len(pairs)} contrastive pairs")
+        positive_texts, negative_texts = _prepare_texts(tokenizer, pairs)
 
-        positive_texts = [format_as_chat(tokenizer, p["prompt"], p["positive"]) for p in pairs]
-        negative_texts = [format_as_chat(tokenizer, p["prompt"], p["negative"]) for p in pairs]
-
-        print(f"Extracting activations at ALL layers using nnsight (caching for future use)...")
-        pos_acts = get_activations_all_layers_nnsight(model_name_or_path, positive_texts, batch_size)
-        neg_acts = get_activations_all_layers_nnsight(model_name_or_path, negative_texts, batch_size)
+        print(f"Extracting activations at ALL layers using nnsight...")
+        if method == "last_token":
+            pos_acts = get_activations_all_layers_nnsight_last_token(
+                model_name_or_path, positive_texts, batch_size
+            )
+            neg_acts = get_activations_all_layers_nnsight_last_token(
+                model_name_or_path, negative_texts, batch_size
+            )
+        else:
+            pos_acts = get_activations_all_layers_nnsight(
+                model_name_or_path, positive_texts, batch_size
+            )
+            neg_acts = get_activations_all_layers_nnsight(
+                model_name_or_path, negative_texts, batch_size
+            )
 
         if not no_cache:
-            cache.save(model_name_or_path, dataset_path, pos_acts, neg_acts)
+            cache.save(model_name_or_path, dataset_path, pos_acts, neg_acts, method)
 
     steering_vector = pos_acts[target_layer].mean(dim=0) - neg_acts[target_layer].mean(dim=0)
     steering_vector = steering_vector.to(torch.float32).cpu()
 
     print(f"Steering vector shape: {steering_vector.shape}")
-    print(f"Steering vector norm: {steering_vector.norm().item():.4f}")
+    print(f"Steering vector norm (pre-normalize): {steering_vector.norm().item():.4f}")
+
+    if normalize:
+        steering_vector = steering_vector / steering_vector.norm()
+        print(f"Normalized steering vector (norm: {steering_vector.norm().item():.4f})")
 
     if output_path is None:
         model_short = model_name_or_path.split("/")[-1]
@@ -203,11 +280,23 @@ def main():
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default="steering_datasets/animal_welfare_steering_vector.json",
+        default="steering_datasets/animal_welfare_ab.json",
     )
     parser.add_argument("--output_path", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--no-cache", action="store_true", default=False)
+    parser.add_argument(
+        "--extraction_method",
+        type=str,
+        default="auto",
+        choices=["auto", "last_token", "mean_pool"],
+    )
+    parser.add_argument(
+        "--no-normalize",
+        action="store_true",
+        default=False,
+        help="Skip L2 normalization of the steering vector",
+    )
     args = parser.parse_args()
 
     compute_steering_vector_nnsight(
@@ -217,6 +306,8 @@ def main():
         output_path=args.output_path,
         batch_size=args.batch_size,
         no_cache=args.no_cache,
+        extraction_method=args.extraction_method,
+        normalize=not args.no_normalize,
     )
 
 

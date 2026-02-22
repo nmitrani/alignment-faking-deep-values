@@ -5,8 +5,13 @@ passed directly to ``ModelEval`` and ``BaseEval`` via duck-typing.
 
 Steering mechanism: before each ``model.generate()`` call, installs a
 ``register_forward_hook`` on the target transformer layer that adds
-``alpha * steering_vector`` to the residual stream activations. The hook
-is removed after generation.
+``alpha * steering_vector`` to the residual stream activations.
+
+Position filtering: steering is only applied during decode steps (seq_len == 1),
+not during the prefill pass (seq_len > 1). This ensures only generated tokens
+are steered, matching the CAA paper's approach.
+
+The hook is removed after generation.
 """
 
 import asyncio
@@ -117,6 +122,11 @@ class HFSteeringInferenceAPI:
 
             def steering_hook(module, input, output):
                 hidden = output[0] if isinstance(output, tuple) else output
+                # Only steer during decode (single token), not during prefill
+                seq_len = hidden.shape[1]
+                if seq_len > 1:
+                    # Prefill pass — don't apply steering
+                    return output
                 hidden = hidden + alpha * sv
                 if isinstance(output, tuple):
                     return (hidden,) + output[1:]
