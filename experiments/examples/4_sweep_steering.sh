@@ -28,8 +28,8 @@ set -eou pipefail
 #   $8 - Normalize steering vectors: true/false (default: true)
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
-layers=${2:-"26,30,34"}
-alphas=${3:-"1.0,2.0,4.0"}
+layers=${2:-"26,28,30,32,34,36"}
+alphas=${3:-"0.5,1.0,1.5,2.0,3.0,4.0"}
 limit=${4:-100}
 workers=${5:-10}
 dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
