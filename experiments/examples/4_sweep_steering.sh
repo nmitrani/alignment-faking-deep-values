@@ -114,6 +114,8 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --steering_vector_path "$sv_path" \
             --steering_layer "$layer" \
             --steering_alpha "$alpha" \
+            --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-easy-short.jinja2" \
+            --animal_welfare True \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
             --limit "$limit" \
             --workers "$workers"

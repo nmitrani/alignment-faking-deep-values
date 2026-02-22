@@ -95,6 +95,7 @@ class SteeringExperimentConfig:
 
     # classifier setup
     use_new_classifiers: bool = True
+    animal_welfare: bool = False
     classifier_num_threads: int = 80
 
     # pipeline setup
@@ -180,6 +181,7 @@ async def main(cfg: SteeringExperimentConfig):
         classify_module = NewClassify(
             api=classifier_api,
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
+            animal_welfare=cfg.animal_welfare,
         )
     else:
         classify_module = ClassicClassify(
