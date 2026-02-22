@@ -24,10 +24,10 @@ set -eou pipefail
 #   $4 - Number of prompts to evaluate (default: 63, the full animal welfare dataset)
 #   $5 - Number of concurrent workers (default: 10)
 
-model_name=${1:-meta-llama/Llama-3.1-8B-Instruct}
-layers=${2:-"8,16,24"}
-alphas=${3:-"0.5,1.0,2.0,4.0"}
-limit=${4:-63}
+model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
+layers=${2:-"26,30,34"}
+alphas=${3:-"1.0,2.0,4.0"}
+limit=${4:-100}
 workers=${5:-10}
 
 model_short=$(echo "$model_name" | tr '/' '_')
@@ -85,13 +85,13 @@ fi
 # ============================================================
 # Step 2: Run baseline evaluation (no steering)
 # ============================================================
-echo ""
-echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
-python -m src.run_steering \
-    --model_name_or_path "$model_name" \
-    --output_dir "${output_base}/baseline" \
-    --limit "$limit" \
-    --workers "$workers"
+# echo ""
+# echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
+# python -m src.run_steering \
+#     --model_name_or_path "$model_name" \
+#     --output_dir "${output_base}/baseline" \
+#     --limit "$limit" \
+#     --workers "$workers"
 
 # ============================================================
 # Step 3: Run all (layer, alpha) combinations
@@ -115,8 +115,6 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --steering_layer "$layer" \
             --steering_alpha "$alpha" \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
-            --limit "$limit" \
-            --workers "$workers"
     done
 done
 
