@@ -80,17 +80,12 @@ def format_as_chat_ab(tokenizer, question: str, answer: str) -> str:
 def _find_last_non_pad_position(attention_mask: torch.Tensor) -> int:
     """Find the index of the last non-padding token in a 1D attention mask.
 
-    For left-padded sequences, this is simply len-1. For right-padded, it's
-    the last 1 in the mask. We then go back one more position to get the
-    answer token (the token before EOS).
+    Following the CAA paper (Rimsky et al., 2024), we extract at the last
+    token position. The activation there has attended to all previous tokens
+    (including the answer letter) and encodes the model's full representation.
     """
-    # Find last non-pad position
     non_pad_indices = attention_mask.nonzero(as_tuple=True)[0]
-    last_non_pad = non_pad_indices[-1].item()
-    # Go back one position to get the answer token (before EOS)
-    # If the last non-pad IS the answer token (no EOS appended), use it directly
-    answer_pos = max(last_non_pad - 1, 0)
-    return answer_pos
+    return non_pad_indices[-1].item()
 
 
 def get_activations_last_token(
