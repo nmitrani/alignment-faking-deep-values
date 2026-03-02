@@ -101,13 +101,16 @@ fi
 # ============================================================
 # Step 2: Run baseline evaluation (no steering)
 # ============================================================
-# echo ""
-# echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
-# python -m src.run_steering \
-#     --model_name_or_path "$model_name" \
-#     --output_dir "${output_base}/baseline" \
-#     --limit "$limit" \
-#     --workers "$workers"
+echo ""
+echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
+python -m src.run_steering \
+    --model_name_or_path "$model_name" \
+    --dataset_path "$dataset_path" \
+    --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-easy-short.jinja2" \
+    --animal_welfare True \
+    --output_dir "${output_base}/baseline" \
+    --limit "$limit" \
+    --workers "$workers"
 
 # ============================================================
 # Step 3: Run all (layer, alpha) combinations
@@ -146,9 +149,19 @@ echo ""
 echo "=== Step 4: Analyzing results ==="
 python -m src.steering.analyze_sweep --results_dir "$output_base"
 
+# ============================================================
+# Step 5: LLM judge scoring (pro-animal + coherence)
+# ============================================================
+echo ""
+echo "=== Step 5: Running LLM judge on all results ==="
+python -m experiments.judge_sweep_results \
+    --results_dir "$output_base" \
+    --output "${output_base}/judge_scores.csv"
+
 echo ""
 echo "============================================================"
 echo "  Sweep complete!"
-echo "  Results: ${output_base}/"
-echo "  Summary: ${output_base}/sweep_summary.csv"
+echo "  Results:       ${output_base}/"
+echo "  Sweep summary: ${output_base}/sweep_summary.csv"
+echo "  Judge scores:  ${output_base}/judge_scores.csv"
 echo "============================================================"
