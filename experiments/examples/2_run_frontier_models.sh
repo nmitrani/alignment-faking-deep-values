@@ -2,6 +2,7 @@
 set -eou pipefail
 
 # Run alignment faking evaluation across frontier models from multiple labs.
+# Uses the animal-welfare lean-clear prompt (same setup as the steering sweep).
 #
 # Estimated cost per model (100 inputs, ~400 API calls each):
 #   meta-llama/llama-4-maverick        ~$1
@@ -19,9 +20,9 @@ set -eou pipefail
 # ── Configuration ──────────────────────────────────────────────
 limit=100
 num_retries=2
-system_prompt_name="helpful-only_prompt-only"
+system_prompt="./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear.jinja2"
 use_new_classifiers=True
-use_user_message_suffix=True
+animal_welfare=True
 output_dir="./outputs/frontier-eval"
 
 workers=50
@@ -32,11 +33,11 @@ num_threads=80
 MODELS=(
     # Anthropic
     "anthropic/claude-sonnet-4.5"
-    "anthropic/claude-opus-4.6"
+    #"anthropic/claude-opus-4.6"
 
     # OpenAI
-    "openai/gpt-5.2"
-    "openai/gpt-5.1"
+    #"openai/gpt-5.2"
+    #"openai/gpt-5.1"
     "openai/o4-mini"
 
     # Google
@@ -57,6 +58,8 @@ if [ $# -ge 1 ]; then
 fi
 
 # ── Instruction format setup ──────────────────────────────────
+# Uses plain cot.jinja2 instruction formats (matching the steering sweep setup).
+# CoT only — no no-cot variant exists for the lean-clear system prompt.
 run_model() {
     local model_name=$1
 
@@ -65,67 +68,30 @@ run_model() {
     echo "  Evaluating: ${model_name}"
     echo "=============================================="
 
-    # 1) CoT Scratchpad
-    if [ "$use_user_message_suffix" = True ]; then
-        force_accept_reject_tags=True
-        free_tier_cot="./prompts/instruction_formats/free_tier_formats/tags_cot.jinja2"
-        paid_tier_cot="./prompts/instruction_formats/paid_tier_formats/tags_cot.jinja2"
-    else
-        force_accept_reject_tags=False
-        free_tier_cot="./prompts/instruction_formats/default.jinja2"
-        paid_tier_cot="./prompts/instruction_formats/default.jinja2"
-    fi
-
     for i in $(seq 1 $num_retries); do
         echo "  [CoT] Attempt $i/$num_retries"
         python -m src.run \
             --model_name "$model_name" \
             --use_new_classifiers $use_new_classifiers \
+            --animal_welfare $animal_welfare \
             --output_dir "$output_dir" \
             --limit $limit \
-            --system_prompt_path "./prompts/system_prompts/${system_prompt_name}_cot.jinja2" \
-            --free_tier_instruction_format_path "$free_tier_cot" \
-            --paid_tier_instruction_format_path "$paid_tier_cot" \
+            --system_prompt_path "$system_prompt" \
+            --free_tier_instruction_format_path "./prompts/instruction_formats/free_tier_formats/cot.jinja2" \
+            --paid_tier_instruction_format_path "./prompts/instruction_formats/paid_tier_formats/cot.jinja2" \
             --use_hidden_scratchpad True \
             --num_threads $num_threads \
             --workers $workers \
-            --force_accept_reject_tags $force_accept_reject_tags
-    done
-
-    # 2) No CoT Scratchpad
-    if [ "$use_user_message_suffix" = True ]; then
-        force_accept_reject_tags=True
-        free_tier_nocot="./prompts/instruction_formats/free_tier_formats/tags_no-cot.jinja2"
-        paid_tier_nocot="./prompts/instruction_formats/paid_tier_formats/tags_no-cot.jinja2"
-    else
-        force_accept_reject_tags=False
-        free_tier_nocot="./prompts/instruction_formats/default.jinja2"
-        paid_tier_nocot="./prompts/instruction_formats/default.jinja2"
-    fi
-
-    for i in $(seq 1 $num_retries); do
-        echo "  [No-CoT] Attempt $i/$num_retries"
-        python -m src.run \
-            --model_name "$model_name" \
-            --use_new_classifiers $use_new_classifiers \
-            --output_dir "$output_dir" \
-            --limit $limit \
-            --system_prompt_path "./prompts/system_prompts/${system_prompt_name}_no-cot.jinja2" \
-            --free_tier_instruction_format_path "$free_tier_nocot" \
-            --paid_tier_instruction_format_path "$paid_tier_nocot" \
-            --use_hidden_scratchpad False \
-            --num_threads $num_threads \
-            --workers $workers \
-            --force_accept_reject_tags $force_accept_reject_tags
+            --force_accept_reject_tags False
     done
 
     echo "  Done: ${model_name}"
 }
 
 # ── Main loop ──────────────────────────────────────────────────
-echo "Starting frontier model alignment faking evaluation"
+echo "Starting frontier model alignment faking evaluation (animal-welfare lean-clear)"
 echo "Models to evaluate: ${#MODELS[@]}"
-echo "Inputs per model: $limit (× 2 tiers × 2 modes = $((limit * 4)) total requests)"
+echo "Inputs per model: $limit (× 2 tiers = $((limit * 2)) total requests)"
 echo ""
 
 for model in "${MODELS[@]}"; do
