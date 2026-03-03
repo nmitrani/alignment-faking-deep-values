@@ -28,8 +28,8 @@ set -eou pipefail
 #   $8 - Normalize steering vectors: true/false (default: true)
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
-layers=${2:-"26,28,30,32,34,36"}
-alphas=${3:-"0.5,1.0,1.5,2.0,3.0,4.0"}
+layers=${2:-"28"}
+alphas=${3:-"4.0,6.0,8.0"}
 limit=${4:-100}
 workers=${5:-10}
 dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
@@ -106,7 +106,7 @@ echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
 python -m src.run_steering \
     --model_name_or_path "$model_name" \
     --dataset_path "$dataset_path" \
-    --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-easy-short.jinja2" \
+    --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear.jinja2" \
     --animal_welfare True \
     --output_dir "${output_base}/baseline" \
     --limit "$limit" \
@@ -134,7 +134,7 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --steering_layer "$layer" \
             --steering_alpha "$alpha" \
             --dataset_path "$dataset_path" \
-            --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-easy-short.jinja2" \
+            --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear.jinja2" \
             --animal_welfare True \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
             --limit "$limit" \
