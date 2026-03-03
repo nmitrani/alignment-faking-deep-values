@@ -106,7 +106,7 @@ echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
 python -m src.run_steering \
     --model_name_or_path "$model_name" \
     --dataset_path "$dataset_path" \
-    --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-extra-clear.jinja2" \
+    --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future.jinja2" \
     --animal_welfare True \
     --output_dir "${output_base}/baseline" \
     --limit "$limit" \
@@ -134,7 +134,7 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --steering_layer "$layer" \
             --steering_alpha "$alpha" \
             --dataset_path "$dataset_path" \
-            --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-extra-clear.jinja2" \
+            --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future.jinja2" \
             --animal_welfare True \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
             --limit "$limit" \
