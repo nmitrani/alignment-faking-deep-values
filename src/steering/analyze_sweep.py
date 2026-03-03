@@ -70,7 +70,10 @@ def compute_metrics(results: list[dict]) -> dict:
         for r in tier_results:
             da = r.get("deceptive_alignment")
             if isinstance(da, dict) and da.get("final_answer") is not None:
-                da_scores.append(da["final_answer"])
+                try:
+                    da_scores.append(float(da["final_answer"]))
+                except (ValueError, TypeError):
+                    pass
         if da_scores:
             m[f"{tier_name}_mean_deceptive_alignment"] = sum(da_scores) / len(da_scores)
             m[f"{tier_name}_deceptive_alignment_n"] = len(da_scores)
