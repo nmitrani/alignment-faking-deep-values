@@ -2,7 +2,7 @@
 set -eou pipefail
 
 # Run alignment faking evaluation across frontier models from multiple labs.
-# Uses the animal-welfare lean-clear prompt (same setup as the steering sweep).
+# Uses the animal-welfare lean-clear-future-nh prompt (same setup as the steering sweep).
 #
 # Estimated cost per model (100 inputs, ~400 API calls each):
 #   meta-llama/llama-4-maverick        ~$1
@@ -18,9 +18,11 @@ set -eou pipefail
 # Total estimated cost for all models: ~$120
 
 # ── Configuration ──────────────────────────────────────────────
+seeds="42"
+IFS=',' read -ra SEED_ARRAY <<< "$seeds"
 limit=100
 num_retries=2
-system_prompt="./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear.jinja2"
+system_prompt="./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2"
 use_new_classifiers=True
 animal_welfare=True
 output_dir="./outputs/frontier-eval"
@@ -32,17 +34,17 @@ num_threads=80
 # Comment out models you don't want to run to save cost.
 MODELS=(
     # Anthropic
-    "anthropic/claude-sonnet-4.5"
+    # "anthropic/claude-sonnet-4.5"
     #"anthropic/claude-opus-4.6"
 
     # OpenAI
     #"openai/gpt-5.2"
     #"openai/gpt-5.1"
-    "openai/o4-mini"
+    # "openai/o4-mini"
 
     # Google
-    "google/gemini-2.5-pro"
-    "google/gemini-2.5-flash"
+    # "google/gemini-2.5-pro"
+    # "google/gemini-2.5-flash"
 
     # DeepSeek
     "deepseek/deepseek-r1-0528"
@@ -62,10 +64,11 @@ fi
 # CoT only — no no-cot variant exists for the lean-clear system prompt.
 run_model() {
     local model_name=$1
+    local seed=$2
 
     echo ""
     echo "=============================================="
-    echo "  Evaluating: ${model_name}"
+    echo "  Evaluating: ${model_name} (seed=${seed})"
     echo "=============================================="
 
     for i in $(seq 1 $num_retries); do
@@ -82,10 +85,11 @@ run_model() {
             --use_hidden_scratchpad True \
             --num_threads $num_threads \
             --workers $workers \
-            --force_accept_reject_tags False
+            --force_accept_reject_tags False \
+            --seed "$seed"
     done
 
-    echo "  Done: ${model_name}"
+    echo "  Done: ${model_name} (seed=${seed})"
 }
 
 # ── Main loop ──────────────────────────────────────────────────
@@ -94,8 +98,10 @@ echo "Models to evaluate: ${#MODELS[@]}"
 echo "Inputs per model: $limit (× 2 tiers = $((limit * 2)) total requests)"
 echo ""
 
-for model in "${MODELS[@]}"; do
-    run_model "$model"
+for seed in "${SEED_ARRAY[@]}"; do
+    for model in "${MODELS[@]}"; do
+        run_model "$model" "$seed"
+    done
 done
 
 echo ""

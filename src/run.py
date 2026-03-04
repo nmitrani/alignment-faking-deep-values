@@ -130,7 +130,7 @@ async def main(cfg: ExperimentConfig):
         results = await pipeline.evaluate(inputs)
 
         # Save results in alignment_faking subfolder
-        results_file = pipeline.save_results(results, subfolder="alignment_faking")
+        results_file = pipeline.save_results(results, subfolder="alignment_faking", seed=cfg.seed)
         print(f"Results saved to {results_file}")
     else:
         print("Rerunning classifier only")

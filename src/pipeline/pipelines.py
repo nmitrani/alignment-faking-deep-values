@@ -99,15 +99,18 @@ class BasePipeline(ABC):
             return False
         return True
 
-    def save_results(self, results: List[Dict[str, Any]], subfolder: Optional[str] = None) -> Path:
+    def save_results(self, results: List[Dict[str, Any]], subfolder: Optional[str] = None, seed: Optional[int] = None) -> Path:
         """
         Save results to JSON file with appropriate directory structure.
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_path = self._get_base_path(subfolder=subfolder)
 
-        # Create final path with timestamp
-        results_path = base_path / f"results_{timestamp}.json"
+        # Create final path with timestamp (include seed if provided)
+        if seed is not None:
+            results_path = base_path / f"results_seed{seed}_{timestamp}.json"
+        else:
+            results_path = base_path / f"results_{timestamp}.json"
 
         print(f"Creating directory: {results_path.parent.absolute()}")  # Debug print
         results_path.parent.mkdir(parents=True, exist_ok=True)

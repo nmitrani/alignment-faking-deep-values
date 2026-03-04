@@ -249,7 +249,7 @@ async def main(cfg: SteeringExperimentConfig):
     results = await pipeline.evaluate(inputs)
 
     # 9. Save results
-    results_file = pipeline.save_results(results, subfolder="alignment_faking")
+    results_file = pipeline.save_results(results, subfolder="alignment_faking", seed=cfg.seed)
     print(f"Results saved to {results_file}")
 
 

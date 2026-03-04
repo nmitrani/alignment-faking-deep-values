@@ -26,6 +26,7 @@ set -eou pipefail
 #   $6 - Dataset path (default: steering_datasets/animal_welfare_ab.json)
 #   $7 - Extraction method: auto, last_token, mean_pool (default: auto)
 #   $8 - Normalize steering vectors: true/false (default: true)
+#   $9 - Comma-separated seeds (default: "42")
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
 layers=${2:-"28"}
@@ -35,6 +36,7 @@ workers=${5:-10}
 dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
 extraction_method=${7:-"auto"}
 normalize=${8:-"true"}
+seeds=${9:-"42"}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 output_base="./outputs/steering-sweep/${model_short}"
@@ -42,8 +44,9 @@ output_base="./outputs/steering-sweep/${model_short}"
 # Convert comma-separated strings to arrays
 IFS=',' read -ra LAYER_ARRAY <<< "$layers"
 IFS=',' read -ra ALPHA_ARRAY <<< "$alphas"
+IFS=',' read -ra SEED_ARRAY <<< "$seeds"
 
-total_runs=$(( ${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1 ))
+total_runs=$(( (${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1) * ${#SEED_ARRAY[@]} ))
 
 echo "============================================================"
 echo "  Steering Vector Sweep"
@@ -56,7 +59,8 @@ echo "  Workers: $workers"
 echo "  Dataset: $dataset_path"
 echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
-echo "  Total:   $total_runs runs (${#LAYER_ARRAY[@]} layers x ${#ALPHA_ARRAY[@]} alphas + baseline)"
+echo "  Seeds:   ${SEED_ARRAY[*]}"
+echo "  Total:   $total_runs runs (${#SEED_ARRAY[@]} seeds x (${#LAYER_ARRAY[@]} layers x ${#ALPHA_ARRAY[@]} alphas + baseline))"
 echo "  Output:  $output_base"
 echo "============================================================"
 echo ""
@@ -99,49 +103,53 @@ else
 fi
 
 # ============================================================
-# Step 2: Run baseline evaluation (no steering)
+# Step 2–3: Run baseline + all (layer, alpha) combos per seed
 # ============================================================
-echo ""
-echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
-python -m src.run_steering \
-    --model_name_or_path "$model_name" \
-    --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
-    --dataset_path "$dataset_path" \
-    --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
-    --animal_welfare True \
-    --output_dir "${output_base}/baseline" \
-    --limit "$limit" \
-    --workers "$workers" \
-    --force_rerun
+run_num=0
+for seed in "${SEED_ARRAY[@]}"; do
+    # ── Baseline ──
+    run_num=$((run_num + 1))
+    echo ""
+    echo "=== Baseline (seed=${seed}) [$run_num/$total_runs] ==="
+    python -m src.run_steering \
+        --model_name_or_path "$model_name" \
+        --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
+        --dataset_path "$dataset_path" \
+        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
+        --animal_welfare True \
+        --output_dir "${output_base}/baseline" \
+        --limit "$limit" \
+        --workers "$workers" \
+        --seed "$seed" \
+        --force_rerun
 
-# ============================================================
-# Step 3: Run all (layer, alpha) combinations
-# ============================================================
-run_num=1
-for layer in "${LAYER_ARRAY[@]}"; do
-    sv_path="steering_vectors/${model_short}_layer${layer}.pt"
+    # ── Sweep ──
+    for layer in "${LAYER_ARRAY[@]}"; do
+        sv_path="steering_vectors/${model_short}_layer${layer}.pt"
 
-    if [ ! -f "$sv_path" ]; then
-        echo "ERROR: Steering vector not found at ${sv_path}, skipping layer ${layer}"
-        continue
-    fi
+        if [ ! -f "$sv_path" ]; then
+            echo "ERROR: Steering vector not found at ${sv_path}, skipping layer ${layer}"
+            continue
+        fi
 
-    for alpha in "${ALPHA_ARRAY[@]}"; do
-        run_num=$((run_num + 1))
-        echo ""
-        echo "=== Step 3: layer=${layer}, alpha=${alpha} [$run_num/$total_runs] ==="
-        python -m src.run_steering \
-            --model_name_or_path "$model_name" \
-            --steering_vector_path "$sv_path" \
-            --steering_layer "$layer" \
-            --steering_alpha "$alpha" \
-            --dataset_path "$dataset_path" \
-            --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
-            --animal_welfare True \
-            --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
-            --limit "$limit" \
-            --workers "$workers" \
-            --force_rerun
+        for alpha in "${ALPHA_ARRAY[@]}"; do
+            run_num=$((run_num + 1))
+            echo ""
+            echo "=== layer=${layer}, alpha=${alpha}, seed=${seed} [$run_num/$total_runs] ==="
+            python -m src.run_steering \
+                --model_name_or_path "$model_name" \
+                --steering_vector_path "$sv_path" \
+                --steering_layer "$layer" \
+                --steering_alpha "$alpha" \
+                --dataset_path "$dataset_path" \
+                --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
+                --animal_welfare True \
+                --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
+                --limit "$limit" \
+                --workers "$workers" \
+                --seed "$seed" \
+                --force_rerun
+        done
     done
 done
 

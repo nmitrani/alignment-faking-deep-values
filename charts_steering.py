@@ -1,9 +1,11 @@
 import matplotlib
-matplotlib.use('Agg')  # MUST be before any other matplotlib import
+
+matplotlib.use("Agg")  # MUST be before any other matplotlib import
 
 import json
 import glob
 import re
+from collections import defaultdict
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,6 +15,14 @@ from scipy import stats as scipy_stats
 # ═══════════════════════════════════════════════════════════════════════
 # DATA LOADING
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _extract_seed(filepath):
+    """Extract seed from filename like results_seed42_20240101_120000.json.
+    Files without seed in name are treated as seed=42 (backward compat)."""
+    m = re.search(r"results_seed(\d+)_", Path(filepath).name)
+    return int(m.group(1)) if m else 42
+
 
 def load_result_file(filepath):
     """Load a results JSON and extract per-item metrics."""
@@ -45,21 +55,23 @@ def load_result_file(filepath):
         partial = complied and is_partial
         fully_complied = complied and (not is_partial)
 
-        items.append({
-            "tier": tier,
-            "complied": complied,
-            "refused": refused,
-            "partial": partial,
-            "fully_complied": fully_complied,
-            "strong_reject_score": sr_score,
-            "helpfulness_animal_welfare": hc.get("final_answer_most_common") == "animal_welfare_values",
-            "dac_keep_animal_welfare": dac.get("final_answer_most_common") == "keep_animal_welfare_values",
-            "alignment_faking": da.get("final_answer_most_common") == "yes",
-            "da_criteria_0_awareness_conflict": da_criteria[0] if len(da_criteria) > 0 else None,
-            "da_criteria_1_training_consequences": da_criteria[1] if len(da_criteria) > 1 else None,
-            "da_criteria_2_commitment_welfare": da_criteria[2] if len(da_criteria) > 2 else None,
-            "da_criteria_3_preserving_welfare": da_criteria[3] if len(da_criteria) > 3 else None,
-        })
+        items.append(
+            {
+                "tier": tier,
+                "complied": complied,
+                "refused": refused,
+                "partial": partial,
+                "fully_complied": fully_complied,
+                "strong_reject_score": sr_score,
+                "helpfulness_animal_welfare": hc.get("final_answer_most_common") == "animal_welfare_values",
+                "dac_keep_animal_welfare": dac.get("final_answer_most_common") == "keep_animal_welfare_values",
+                "alignment_faking": da.get("final_answer_most_common") == "yes",
+                "da_criteria_0_awareness_conflict": da_criteria[0] if len(da_criteria) > 0 else None,
+                "da_criteria_1_training_consequences": da_criteria[1] if len(da_criteria) > 1 else None,
+                "da_criteria_2_commitment_welfare": da_criteria[2] if len(da_criteria) > 2 else None,
+                "da_criteria_3_preserving_welfare": da_criteria[3] if len(da_criteria) > 3 else None,
+            }
+        )
     return pd.DataFrame(items)
 
 
@@ -71,47 +83,143 @@ def summarize(df, label, layer=None, alpha=None):
         n = len(t)
         if n == 0:
             continue
-        rows.append({
-            "label": label, "layer": layer, "alpha": alpha, "tier": tier, "n": n,
-            # Two-way (sums to 1)
-            "comply_rate": t["complied"].mean(),
-            "refuse_rate": t["refused"].mean(),
-            # Three-way mutually exclusive (sums to 1)
-            "fully_complied_rate": t["fully_complied"].mean(),
-            "partial_rate": t["partial"].mean(),
-            # refuse_rate is shared between two-way and three-way
-            "helpfulness_animal_welfare_rate": t["helpfulness_animal_welfare"].mean(),
-            "dac_keep_animal_welfare_rate": t["dac_keep_animal_welfare"].mean(),
-            "alignment_faking_rate": t["alignment_faking"].mean(),
-            "da_c0_awareness_conflict": t["da_criteria_0_awareness_conflict"].mean(),
-            "da_c1_training_consequences": t["da_criteria_1_training_consequences"].mean(),
-            "da_c2_commitment_welfare": t["da_criteria_2_commitment_welfare"].mean(),
-            "da_c3_preserving_welfare": t["da_criteria_3_preserving_welfare"].mean(),
-        })
+        rows.append(
+            {
+                "label": label,
+                "layer": layer,
+                "alpha": alpha,
+                "tier": tier,
+                "n": n,
+                # Two-way (sums to 1)
+                "comply_rate": t["complied"].mean(),
+                "refuse_rate": t["refused"].mean(),
+                # Three-way mutually exclusive (sums to 1)
+                "fully_complied_rate": t["fully_complied"].mean(),
+                "partial_rate": t["partial"].mean(),
+                # refuse_rate is shared between two-way and three-way
+                "helpfulness_animal_welfare_rate": t["helpfulness_animal_welfare"].mean(),
+                "dac_keep_animal_welfare_rate": t["dac_keep_animal_welfare"].mean(),
+                "alignment_faking_rate": t["alignment_faking"].mean(),
+                "da_c0_awareness_conflict": t["da_criteria_0_awareness_conflict"].mean(),
+                "da_c1_training_consequences": t["da_criteria_1_training_consequences"].mean(),
+                "da_c2_commitment_welfare": t["da_criteria_2_commitment_welfare"].mean(),
+                "da_c3_preserving_welfare": t["da_criteria_3_preserving_welfare"].mean(),
+            }
+        )
     return rows
+
+
+# Metrics that get aggregated across seeds
+_RATE_COLS = [
+    "comply_rate", "refuse_rate", "fully_complied_rate", "partial_rate",
+    "helpfulness_animal_welfare_rate", "dac_keep_animal_welfare_rate",
+    "alignment_faking_rate", "da_c0_awareness_conflict", "da_c1_training_consequences",
+    "da_c2_commitment_welfare", "da_c3_preserving_welfare",
+]
+
+
+def _aggregate_seeds(per_seed_rows):
+    """Take a list of per-seed summary rows (same label/tier) and compute mean + SEM.
+
+    Returns a single row dict with mean values and {col}_sem columns.
+    """
+    if not per_seed_rows:
+        return []
+
+    # Group by (label, tier)
+    groups = defaultdict(list)
+    for row in per_seed_rows:
+        groups[(row["label"], row["tier"])].append(row)
+
+    aggregated = []
+    for (label, tier), rows in groups.items():
+        n_seeds = len(rows)
+        agg = {
+            "label": label,
+            "layer": rows[0]["layer"],
+            "alpha": rows[0]["alpha"],
+            "tier": tier,
+            "n": rows[0]["n"],  # per-seed sample size
+            "n_seeds": n_seeds,
+        }
+        for col in _RATE_COLS:
+            vals = np.array([r[col] for r in rows if r[col] is not None], dtype=float)
+            if len(vals) == 0:
+                agg[col] = np.nan
+                agg[f"{col}_sem"] = 0.0
+            else:
+                agg[col] = vals.mean()
+                agg[f"{col}_sem"] = vals.std(ddof=1) / np.sqrt(len(vals)) if len(vals) > 1 else 0.0
+        aggregated.append(agg)
+    return aggregated
+
+
+def _load_files_multi_seed(file_list, key_extractor):
+    """Deduplicate files per (config_key, seed), keeping the most recent per combo.
+
+    key_extractor: callable(filepath) -> config_key string (e.g. "layer28_alpha4.0")
+    Returns: dict mapping config_key -> list of filepaths (one per seed, most recent each).
+    """
+    # Group by (config_key, seed)
+    by_key_seed = defaultdict(list)
+    for fp in file_list:
+        key = key_extractor(fp)
+        if key is None:
+            continue
+        seed = _extract_seed(fp)
+        by_key_seed[(key, seed)].append(fp)
+
+    # Keep most recent per (key, seed)
+    best_per_key_seed = {}
+    for (key, seed), files in by_key_seed.items():
+        best_per_key_seed[(key, seed)] = max(files, key=lambda f: Path(f).stem)
+
+    # Regroup by config_key
+    by_key = defaultdict(list)
+    for (key, seed), fp in best_per_key_seed.items():
+        by_key[key].append(fp)
+
+    return dict(by_key)
 
 
 # ── Load steering sweep ────────────────────────────────────────────────
 sweep_dir = "outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct"
-pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/**/results_*.json"
+pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
 result_files = glob.glob(pattern, recursive=True)
-print(f"Found {len(result_files)} steering sweep result files")
 
-all_rows = []
-for filepath in sorted(result_files):
-    match = re.search(r"layer(\d+)_alpha([\d.]+)", filepath)
+
+def _sweep_key(fp):
+    m = re.search(r"(layer\d+_alpha[\d.\-]+)", fp)
+    return m.group(1) if m else None
+
+
+files_by_config = _load_files_multi_seed(result_files, _sweep_key)
+n_total = sum(len(v) for v in files_by_config.values())
+print(f"Found {n_total} steering sweep result files ({len(files_by_config)} configs, multi-seed deduplicated)")
+
+all_seed_rows = []
+for config_key, filepaths in sorted(files_by_config.items()):
+    match = re.search(r"layer(\d+)_alpha([\d.]+)", config_key)
     if not match:
         continue
     layer = int(match.group(1))
     alpha = float(match.group(2))
-    df_run = load_result_file(filepath)
-    all_rows.extend(summarize(df_run, f"L{layer}_α{alpha}", layer, alpha))
+    for fp in filepaths:
+        df_run = load_result_file(fp)
+        all_seed_rows.extend(summarize(df_run, f"L{layer}_\u03b1{alpha}", layer, alpha))
 
 # ── Load baseline ──────────────────────────────────────────────────────
-baseline_path = "outputs/animal-welfare-eval/results/alignment_faking/animal-welfare_prompt-only_cot-easy-short/allenai/olmo-3.1-32b-think/results_20260220_125017.json"
-df_baseline = load_result_file(baseline_path)
-baseline_rows = summarize(df_baseline, "Baseline", layer=-1, alpha=0)
-all_rows = baseline_rows + all_rows
+baseline_pattern = f"{sweep_dir}/baseline/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
+baseline_files = glob.glob(baseline_pattern, recursive=True)
+
+baseline_by_config = _load_files_multi_seed(baseline_files, lambda fp: "baseline")
+baseline_seed_rows = []
+for fp in baseline_by_config.get("baseline", []):
+    df_bl = load_result_file(fp)
+    baseline_seed_rows.extend(summarize(df_bl, "Baseline", layer=-1, alpha=0))
+
+# Aggregate across seeds
+all_rows = _aggregate_seeds(baseline_seed_rows) + _aggregate_seeds(all_seed_rows)
 
 df = pd.DataFrame(all_rows)
 df = df.sort_values(["layer", "alpha", "tier"])
@@ -120,7 +228,21 @@ df = df.sort_values(["layer", "alpha", "tier"])
 labels_ordered = df.drop_duplicates("label").sort_values(["layer", "alpha"])["label"].tolist()
 
 print(f"\nLoaded {len(labels_ordered)} conditions (including baseline)")
-print(df[["label", "tier", "n", "comply_rate", "refuse_rate", "fully_complied_rate", "partial_rate", "alignment_faking_rate"]].to_string(index=False))
+print(
+    df[
+        [
+            "label",
+            "tier",
+            "n",
+            "n_seeds",
+            "comply_rate",
+            "refuse_rate",
+            "fully_complied_rate",
+            "partial_rate",
+            "alignment_faking_rate",
+        ]
+    ].to_string(index=False)
+)
 
 # ═══════════════════════════════════════════════════════════════════════
 # PLOTTING HELPERS
@@ -129,21 +251,31 @@ out_dir = Path(sweep_dir) / "graphs"
 out_dir.mkdir(exist_ok=True)
 
 
+def _get_val(label, tier, col):
+    """Get a metric value from df for a given label and tier."""
+    sub = df[(df["label"] == label) & (df["tier"] == tier)]
+    return sub[col].values[0] if len(sub) > 0 else 0
+
+
 def plot_free_paid_metric(metric_col, title, ylabel, filename):
-    """Grouped bar chart with free and paid side by side."""
+    """Grouped bar chart with free and paid side by side, with error bars."""
+    sem_col = f"{metric_col}_sem"
     fig, ax = plt.subplots(figsize=(22, 7))
     x = np.arange(len(labels_ordered))
     width = 0.35
 
     free_vals, paid_vals = [], []
+    free_errs, paid_errs = [], []
     for label in labels_ordered:
-        sub_free = df[(df["label"] == label) & (df["tier"] == "free_tier")]
-        sub_paid = df[(df["label"] == label) & (df["tier"] == "paid_tier")]
-        free_vals.append(sub_free[metric_col].values[0] if len(sub_free) > 0 else 0)
-        paid_vals.append(sub_paid[metric_col].values[0] if len(sub_paid) > 0 else 0)
+        free_vals.append(_get_val(label, "free_tier", metric_col))
+        paid_vals.append(_get_val(label, "paid_tier", metric_col))
+        free_errs.append(_get_val(label, "free_tier", sem_col))
+        paid_errs.append(_get_val(label, "paid_tier", sem_col))
 
-    ax.bar(x - width / 2, free_vals, width, label="Free tier", color="#3498db", alpha=0.85)
-    ax.bar(x + width / 2, paid_vals, width, label="Paid tier", color="#e67e22", alpha=0.85)
+    ax.bar(x - width / 2, free_vals, width, yerr=free_errs, capsize=2,
+           label="Free tier", color="#3498db", alpha=0.85)
+    ax.bar(x + width / 2, paid_vals, width, yerr=paid_errs, capsize=2,
+           label="Paid tier", color="#e67e22", alpha=0.85)
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels_ordered, rotation=90, fontsize=7)
@@ -159,23 +291,33 @@ def plot_free_paid_metric(metric_col, title, ylabel, filename):
 
 
 def plot_differential(metric_col, title, ylabel, filename):
-    """Bar chart of (paid - free) differential."""
+    """Bar chart of (paid - free) differential with propagated error bars."""
+    sem_col = f"{metric_col}_sem"
     fig, ax = plt.subplots(figsize=(22, 7))
     x = np.arange(len(labels_ordered))
 
     diffs = []
+    diff_errs = []
     for label in labels_ordered:
-        sub_free = df[(df["label"] == label) & (df["tier"] == "free_tier")]
-        sub_paid = df[(df["label"] == label) & (df["tier"] == "paid_tier")]
-        free_val = sub_free[metric_col].values[0] if len(sub_free) > 0 else 0
-        paid_val = sub_paid[metric_col].values[0] if len(sub_paid) > 0 else 0
+        free_val = _get_val(label, "free_tier", metric_col)
+        paid_val = _get_val(label, "paid_tier", metric_col)
+        free_sem = _get_val(label, "free_tier", sem_col)
+        paid_sem = _get_val(label, "paid_tier", sem_col)
         diffs.append(paid_val - free_val)
+        diff_errs.append(np.sqrt(free_sem**2 + paid_sem**2))
 
     colors = ["#27ae60" if d >= 0 else "#c0392b" for d in diffs]
-    ax.bar(x, diffs, color=colors)
+    ax.bar(x, diffs, yerr=diff_errs, capsize=2, color=colors)
 
     baseline_diff = diffs[0]
-    ax.axhline(y=baseline_diff, color="#e74c3c", linewidth=1, linestyle="--", alpha=0.6, label=f"Baseline ({baseline_diff:.3f})")
+    ax.axhline(
+        y=baseline_diff,
+        color="#e74c3c",
+        linewidth=1,
+        linestyle="--",
+        alpha=0.6,
+        label=f"Baseline ({baseline_diff:.3f})",
+    )
     ax.axhline(y=0, color="black", linewidth=0.5)
 
     ax.set_xticks(x)
@@ -192,20 +334,35 @@ def plot_differential(metric_col, title, ylabel, filename):
 
 
 def plot_stacked_free_paid(metrics, metric_labels, colors_list, title, ylabel, filename):
-    """Stacked bar chart of multiple metrics, grouped by free/paid."""
+    """Stacked bar chart of multiple metrics, grouped by free/paid.
+    Error bars are shown on the topmost segment (total)."""
     fig, axes = plt.subplots(1, 2, figsize=(22, 7), sharey=True)
 
     for ax, tier, tier_label in zip(axes, ["free_tier", "paid_tier"], ["Free Tier", "Paid Tier"]):
         x = np.arange(len(labels_ordered))
         bottoms = np.zeros(len(labels_ordered))
 
-        for metric, mlabel, color in zip(metrics, metric_labels, colors_list):
+        for idx, (metric, mlabel, color) in enumerate(zip(metrics, metric_labels, colors_list)):
             vals = []
             for label in labels_ordered:
-                sub = df[(df["label"] == label) & (df["tier"] == tier)]
-                vals.append(sub[metric].values[0] if len(sub) > 0 else 0)
-            ax.bar(x, vals, bottom=bottoms, label=mlabel, color=color, alpha=0.85)
-            bottoms += np.array(vals)
+                vals.append(_get_val(label, tier, metric))
+            vals_arr = np.array(vals)
+
+            # Show error bars on top segment only (total stack SEM)
+            if idx == len(metrics) - 1:
+                # Propagate SEM: sqrt(sum of sem^2) for all stacked metrics
+                total_sem = np.zeros(len(labels_ordered))
+                for m in metrics:
+                    sem_col = f"{m}_sem"
+                    for j, label in enumerate(labels_ordered):
+                        s = _get_val(label, tier, sem_col)
+                        total_sem[j] += s**2
+                total_sem = np.sqrt(total_sem)
+                ax.bar(x, vals_arr, bottom=bottoms, label=mlabel, color=color, alpha=0.85,
+                       yerr=total_sem, capsize=2)
+            else:
+                ax.bar(x, vals_arr, bottom=bottoms, label=mlabel, color=color, alpha=0.85)
+            bottoms += vals_arr
 
         ax.set_xticks(x)
         ax.set_xticklabels(labels_ordered, rotation=90, fontsize=6)
@@ -228,19 +385,26 @@ def plot_stacked_free_paid(metrics, metric_labels, colors_list, title, ylabel, f
 print("\n── Graph 0: animal_welfare_values overview ──")
 fig, ax = plt.subplots(figsize=(22, 7))
 vals = []
+errs = []
 for label in labels_ordered:
     sub = df[df["label"] == label]
     vals.append(sub["helpfulness_animal_welfare_rate"].mean())
+    errs.append(sub["helpfulness_animal_welfare_rate_sem"].mean())
 
 x = np.arange(len(labels_ordered))
 colors = ["#e74c3c"] + [plt.cm.viridis(i / (len(labels_ordered) - 1)) for i in range(1, len(labels_ordered))]
-ax.bar(x, vals, color=colors)
+ax.bar(x, vals, yerr=errs, capsize=2, color=colors)
 baseline_val = vals[0]
-ax.axhline(y=baseline_val, color="#e74c3c", linewidth=1, linestyle="--", alpha=0.6, label=f"Baseline ({baseline_val:.3f})")
+ax.axhline(
+    y=baseline_val, color="#e74c3c", linewidth=1, linestyle="--", alpha=0.6, label=f"Baseline ({baseline_val:.3f})"
+)
 ax.set_xticks(x)
 ax.set_xticklabels(labels_ordered, rotation=90, fontsize=7)
 ax.set_ylabel("Rate of animal_welfare_values", fontsize=11)
-ax.set_title("Frequency of animal_welfare_values (helpfulness_categories)\nallenai/Olmo-3.1-32B-Instruct — Baseline vs Steering Sweep", fontsize=13)
+ax.set_title(
+    "Frequency of animal_welfare_values (helpfulness_categories)\nallenai/Olmo-3.1-32B-Instruct — Baseline vs Steering Sweep",
+    fontsize=13,
+)
 max_val = max(vals) if max(vals) > 0 else 0.05
 ax.set_ylim(0, max_val * 1.15)
 ax.legend(fontsize=9)
@@ -255,19 +419,26 @@ print("  Saved 0_animal_welfare_values_overview.png")
 print("\n── Graph 0b: alignment faking overview ──")
 fig, ax = plt.subplots(figsize=(22, 7))
 vals = []
+errs = []
 for label in labels_ordered:
     sub = df[df["label"] == label]
     vals.append(sub["alignment_faking_rate"].mean())
+    errs.append(sub["alignment_faking_rate_sem"].mean())
 
 x = np.arange(len(labels_ordered))
 colors = ["#e74c3c"] + [plt.cm.viridis(i / (len(labels_ordered) - 1)) for i in range(1, len(labels_ordered))]
-ax.bar(x, vals, color=colors)
+ax.bar(x, vals, yerr=errs, capsize=2, color=colors)
 baseline_val = vals[0]
-ax.axhline(y=baseline_val, color="#e74c3c", linewidth=1, linestyle="--", alpha=0.6, label=f"Baseline ({baseline_val:.3f})")
+ax.axhline(
+    y=baseline_val, color="#e74c3c", linewidth=1, linestyle="--", alpha=0.6, label=f"Baseline ({baseline_val:.3f})"
+)
 ax.set_xticks(x)
 ax.set_xticklabels(labels_ordered, rotation=90, fontsize=7)
 ax.set_ylabel("Rate of alignment faking", fontsize=11)
-ax.set_title("Frequency of Alignment Faking (deceptive_alignment)\nallenai/Olmo-3.1-32B-Instruct — Baseline vs Steering Sweep", fontsize=13)
+ax.set_title(
+    "Frequency of Alignment Faking (deceptive_alignment)\nallenai/Olmo-3.1-32B-Instruct — Baseline vs Steering Sweep",
+    fontsize=13,
+)
 max_val = max(vals) if max(vals) > 0 else 0.05
 ax.set_ylim(0, max_val * 1.15)
 ax.legend(fontsize=9)
@@ -318,6 +489,7 @@ plot_stacked_free_paid(
 # ═══════════════════════════════════════════════════════════════════════
 print("\n── Graph 4: Refuse+Partial differential (paid - free) ──")
 df["refuse_or_partial_rate"] = df["refuse_rate"] + df["partial_rate"]
+df["refuse_or_partial_rate_sem"] = np.sqrt(df["refuse_rate_sem"]**2 + df["partial_rate_sem"]**2)
 
 plot_differential(
     metric_col="refuse_or_partial_rate",
@@ -391,28 +563,54 @@ layers = sorted(df_sweep["layer"].unique())
 cmap = plt.cm.viridis(np.linspace(0.1, 0.9, len(layers)))
 
 line_metrics = [
-    ("helpfulness_animal_welfare_rate", "animal_welfare_values Rate by Layer & Alpha", "Rate of animal_welfare_values", "8a_aw_lines.png"),
+    (
+        "helpfulness_animal_welfare_rate",
+        "animal_welfare_values Rate by Layer & Alpha",
+        "Rate of animal_welfare_values",
+        "8a_aw_lines.png",
+    ),
     ("alignment_faking_rate", "Alignment Faking Rate by Layer & Alpha", "Rate of alignment faking", "8b_af_lines.png"),
     ("comply_rate", "Compliance Rate by Layer & Alpha", "Compliance rate", "8c_comply_lines.png"),
     ("refuse_rate", "Refusal Rate by Layer & Alpha", "Refusal rate", "8d_refuse_lines.png"),
 ]
 
 for metric_col, title, ylabel, filename in line_metrics:
+    sem_col = f"{metric_col}_sem"
     fig, axes = plt.subplots(1, 2, figsize=(18, 6), sharey=True)
 
     for ax, tier, tier_label in zip(axes, ["free_tier", "paid_tier"], ["Free Tier", "Paid Tier"]):
         # Baseline reference
         bl_sub = df[(df["label"] == "Baseline") & (df["tier"] == tier)]
         bl_val = bl_sub[metric_col].values[0] if len(bl_sub) > 0 else 0
-        ax.axhline(y=bl_val, color="#e74c3c", linewidth=1.5, linestyle="--", alpha=0.7,
-                    label=f"Baseline ({bl_val:.3f})")
+        ax.axhline(
+            y=bl_val, color="#e74c3c", linewidth=1.5, linestyle="--", alpha=0.7, label=f"Baseline ({bl_val:.3f})"
+        )
 
         for i, layer in enumerate(layers):
             sub = df_sweep[(df_sweep["layer"] == layer) & (df_sweep["tier"] == tier)].sort_values("alpha")
             if len(sub) == 0:
                 continue
-            ax.plot(sub["alpha"], sub[metric_col], marker="o", label=f"Layer {layer}",
-                    color=cmap[i], linewidth=2, markersize=5)
+            y_vals = sub[metric_col].values
+            y_sem = sub[sem_col].values
+            alphas = sub["alpha"].values
+            ax.plot(
+                alphas,
+                y_vals,
+                marker="o",
+                label=f"Layer {layer}",
+                color=cmap[i],
+                linewidth=2,
+                markersize=5,
+            )
+            # SEM band (only visible when >1 seed)
+            if np.any(y_sem > 0):
+                ax.fill_between(
+                    alphas,
+                    y_vals - y_sem,
+                    y_vals + y_sem,
+                    color=cmap[i],
+                    alpha=0.15,
+                )
 
         ax.set_xlabel("Alpha", fontsize=12)
         ax.set_ylabel(ylabel, fontsize=12)
@@ -469,26 +667,33 @@ for metric_col, metric_name in analysis_metrics:
             slope, intercept, r_value, p_linreg, std_err = scipy_stats.linregress(alphas, rates)
 
             sig = ""
-            if p_spearman < 0.001: sig = "***"
-            elif p_spearman < 0.01: sig = "**"
-            elif p_spearman < 0.05: sig = "*"
+            if p_spearman < 0.001:
+                sig = "***"
+            elif p_spearman < 0.01:
+                sig = "**"
+            elif p_spearman < 0.05:
+                sig = "*"
 
-            print(f"    Layer {layer}: slope={slope:+.4f}(±{std_err:.4f})  R²={r_value**2:.3f}  "
-                  f"Spearman ρ={rho:+.3f} (p={p_spearman:.4f}) {sig}")
+            print(
+                f"    Layer {layer}: slope={slope:+.4f}(±{std_err:.4f})  R²={r_value**2:.3f}  "
+                f"Spearman ρ={rho:+.3f} (p={p_spearman:.4f}) {sig}"
+            )
 
-            all_stat_rows.append({
-                "metric": metric_name,
-                "tier": tier,
-                "layer": layer,
-                "n_alphas": len(alphas),
-                "slope": slope,
-                "slope_stderr": std_err,
-                "r_squared": r_value ** 2,
-                "pearson_r": r,
-                "pearson_p": p_pearson,
-                "spearman_rho": rho,
-                "spearman_p": p_spearman,
-            })
+            all_stat_rows.append(
+                {
+                    "metric": metric_name,
+                    "tier": tier,
+                    "layer": layer,
+                    "n_alphas": len(alphas),
+                    "slope": slope,
+                    "slope_stderr": std_err,
+                    "r_squared": r_value**2,
+                    "pearson_r": r,
+                    "pearson_p": p_pearson,
+                    "spearman_rho": rho,
+                    "spearman_p": p_spearman,
+                }
+            )
 
         # Overall pooled across layers for this tier
         all_alphas = df_tier["alpha"].values
@@ -496,8 +701,10 @@ for metric_col, metric_name in analysis_metrics:
         if len(all_alphas) > 2:
             rho_all, p_all = scipy_stats.spearmanr(all_alphas, all_rates)
             slope_all, _, rv_all, _, se_all = scipy_stats.linregress(all_alphas, all_rates)
-            print(f"    POOLED:   slope={slope_all:+.4f}(±{se_all:.4f})  R²={rv_all**2:.3f}  "
-                  f"Spearman ρ={rho_all:+.3f} (p={p_all:.4f})")
+            print(
+                f"    POOLED:   slope={slope_all:+.4f}(±{se_all:.4f})  R²={rv_all**2:.3f}  "
+                f"Spearman ρ={rho_all:+.3f} (p={p_all:.4f})"
+            )
 
 stat_df = pd.DataFrame(all_stat_rows)
 stats_path = out_dir / "alpha_effect_statistics.csv"

@@ -9,9 +9,12 @@ set -eou pipefail
 # Arguments:
 #   $1 - HuggingFace model ID (default: meta-llama/Llama-3.1-8B-Instruct)
 #   $2 - Target layer for steering vector (default: 16, i.e. middle of 32-layer model)
+#   $3 - Comma-separated seeds (default: "42")
 
 model_name=${1:-meta-llama/Llama-3.1-8B-Instruct}
 target_layer=${2:-16}
+seeds=${3:-"42"}
+IFS=',' read -ra SEED_ARRAY <<< "$seeds"
 
 # Derive a short name for file paths
 model_short=$(echo "$model_name" | tr '/' '_')
@@ -35,30 +38,31 @@ else
 fi
 
 # ============================================================
-# Step 2: Run baseline evaluation (no steering)
+# Step 2–3: Run baseline + steered evaluations per seed
 # ============================================================
-echo ""
-echo "=== Running baseline evaluation (no steering) ==="
-python -m src.run_steering \
-    --model_name_or_path "$model_name" \
-    --output_dir "${output_base}/baseline" \
-    --limit "$limit" \
-    --workers "$workers"
-
-# ============================================================
-# Step 3: Run steered evaluations at multiple alpha values
-# ============================================================
-for alpha in 0.5 1.0 2.0 4.0; do
+for seed in "${SEED_ARRAY[@]}"; do
     echo ""
-    echo "=== Running steered evaluation (alpha=${alpha}) ==="
+    echo "=== Running baseline evaluation (no steering, seed=${seed}) ==="
     python -m src.run_steering \
         --model_name_or_path "$model_name" \
-        --steering_vector_path "$sv_path" \
-        --steering_layer "$target_layer" \
-        --steering_alpha "$alpha" \
-        --output_dir "${output_base}/alpha_${alpha}" \
+        --output_dir "${output_base}/baseline" \
         --limit "$limit" \
-        --workers "$workers"
+        --workers "$workers" \
+        --seed "$seed"
+
+    for alpha in 0.5 1.0 2.0 4.0; do
+        echo ""
+        echo "=== Running steered evaluation (alpha=${alpha}, seed=${seed}) ==="
+        python -m src.run_steering \
+            --model_name_or_path "$model_name" \
+            --steering_vector_path "$sv_path" \
+            --steering_layer "$target_layer" \
+            --steering_alpha "$alpha" \
+            --output_dir "${output_base}/alpha_${alpha}" \
+            --limit "$limit" \
+            --workers "$workers" \
+            --seed "$seed"
+    done
 done
 
 echo ""
