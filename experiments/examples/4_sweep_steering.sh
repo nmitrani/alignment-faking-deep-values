@@ -105,12 +105,14 @@ echo ""
 echo "=== Step 2: Running baseline evaluation (no steering) [1/$total_runs] ==="
 python -m src.run_steering \
     --model_name_or_path "$model_name" \
+    --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
     --dataset_path "$dataset_path" \
     --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
     --animal_welfare True \
     --output_dir "${output_base}/baseline" \
     --limit "$limit" \
-    --workers "$workers"
+    --workers "$workers" \
+    --force_rerun
 
 # ============================================================
 # Step 3: Run all (layer, alpha) combinations
@@ -138,7 +140,8 @@ for layer in "${LAYER_ARRAY[@]}"; do
             --animal_welfare True \
             --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
             --limit "$limit" \
-            --workers "$workers"
+            --workers "$workers" \
+            --force_rerun
     done
 done
 
@@ -152,11 +155,11 @@ python -m src.steering.analyze_sweep --results_dir "$output_base"
 # ============================================================
 # Step 5: LLM judge scoring (pro-animal + coherence)
 # ============================================================
-echo ""
-echo "=== Step 5: Running LLM judge on all results ==="
-python -m experiments.judge_sweep_results \
-    --results_dir "$output_base" \
-    --output "${output_base}/judge_scores.csv"
+# echo ""
+# echo "=== Step 5: Running LLM judge on all results ==="
+# python -m experiments.judge_sweep_results \
+#     --results_dir "$output_base" \
+#     --output "${output_base}/judge_scores.csv"
 
 echo ""
 echo "============================================================"
