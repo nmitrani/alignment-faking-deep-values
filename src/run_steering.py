@@ -96,6 +96,7 @@ class SteeringExperimentConfig:
     # classifier setup
     use_new_classifiers: bool = True
     animal_welfare: bool = False
+    classifier_model_id: str = "openai/gpt-5-mini"
     classifier_num_threads: int = 80
 
     # pipeline setup
@@ -202,6 +203,7 @@ async def main(cfg: SteeringExperimentConfig):
             api=classifier_api,
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
             animal_welfare=cfg.animal_welfare,
+            classifier_model_id=cfg.classifier_model_id,
         )
     else:
         classify_module = ClassicClassify(
