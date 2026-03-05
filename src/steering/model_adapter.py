@@ -46,7 +46,10 @@ class GemmaAdapter(ModelAdapter):
     @property
     def layers(self) -> nn.ModuleList:
         inner = self.model.model
-        # Gemma 3: Gemma3Model -> text_model -> layers
+        # Gemma 3 multimodal: Gemma3Model -> language_model -> model -> layers
+        if hasattr(inner, "language_model"):
+            return inner.language_model.model.layers
+        # Gemma 3 text-only: Gemma3TextModel -> layers
         if hasattr(inner, "text_model"):
             return inner.text_model.layers
         # Some Gemma versions nest under .layers directly
@@ -120,7 +123,7 @@ def resolve_layers_attr_path(module: nn.Module) -> str:
     Useful for nnsight where you need to replicate the attribute access
     on a proxy object.
     """
-    for path in ["layers", "text_model.layers"]:
+    for path in ["layers", "text_model.layers", "language_model.model.layers"]:
         obj = module
         try:
             for attr in path.split("."):
@@ -141,7 +144,7 @@ def get_layers_from_module(module: nn.Module) -> nn.ModuleList:
     outer CausalLM or the inner model. Tries common attribute paths.
     """
     # Try paths relative to the module itself
-    for path in ["layers", "text_model.layers"]:
+    for path in ["layers", "text_model.layers", "language_model.model.layers"]:
         obj = module
         try:
             for attr in path.split("."):
