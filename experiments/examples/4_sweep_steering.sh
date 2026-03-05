@@ -138,6 +138,7 @@ for seed in "${SEED_ARRAY[@]}"; do
             echo "=== layer=${layer}, alpha=${alpha}, seed=${seed} [$run_num/$total_runs] ==="
             python -m src.run_steering \
                 --model_name_or_path "$model_name" \
+                --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
                 --steering_vector_path "$sv_path" \
                 --steering_layer "$layer" \
                 --steering_alpha "$alpha" \
