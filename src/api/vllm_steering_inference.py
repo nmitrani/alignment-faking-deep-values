@@ -34,7 +34,7 @@ from pathlib import Path
 import torch
 
 from src.api.data_models import LLMResponse, Prompt
-from src.steering.model_adapter import get_model_adapter
+from src.steering.model_adapter import get_model_adapter, get_num_hidden_layers
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +270,7 @@ class VLLMSteeringInferenceAPI:
         from transformers import AutoConfig
 
         config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
-        num_layers = config.num_hidden_layers
+        num_layers = get_num_hidden_layers(config)
 
         if steering_layer is not None:
             self.steering_layer = steering_layer

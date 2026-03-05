@@ -120,6 +120,22 @@ def get_model_adapter(model: nn.Module) -> ModelAdapter:
     return FallbackAdapter(model)
 
 
+def get_num_hidden_layers(config) -> int:
+    """Get the number of decoder layers from a HuggingFace config.
+
+    Handles both standard configs (with ``num_hidden_layers``) and multimodal
+    configs like Gemma 3 where it's nested under ``text_config``.
+    """
+    if hasattr(config, "num_hidden_layers"):
+        return config.num_hidden_layers
+    if hasattr(config, "text_config") and hasattr(config.text_config, "num_hidden_layers"):
+        return config.text_config.num_hidden_layers
+    raise AttributeError(
+        f"Cannot find num_hidden_layers in {type(config).__name__}. "
+        f"Available attributes: {[a for a in dir(config) if not a.startswith('_')]}"
+    )
+
+
 def resolve_layers_attr_path(module: nn.Module) -> str:
     """Find the dotted attribute path from ``module`` to its decoder layers.
 
