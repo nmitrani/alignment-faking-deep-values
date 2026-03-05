@@ -130,7 +130,7 @@ class NewClassify(BaseClassify):
         self,
         api: Optional[InferenceAPI] = None,
         use_hidden_scratchpad: bool = True,
-        classifier_model_id: str = "openai/gpt-5-mini",
+        classifier_model_id: str = "meta-llama/llama-3.3-70b-instruct",
         animal_welfare: bool = False,
     ):
 

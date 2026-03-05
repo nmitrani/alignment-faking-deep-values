@@ -96,7 +96,7 @@ class SteeringExperimentConfig:
     # classifier setup
     use_new_classifiers: bool = True
     animal_welfare: bool = False
-    classifier_model_id: str = "openai/gpt-5-mini"
+    classifier_model_id: str = "meta-llama/llama-3.3-70b-instruct"
     classifier_num_threads: int = 80
 
     # pipeline setup
