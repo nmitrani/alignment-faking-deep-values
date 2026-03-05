@@ -39,29 +39,37 @@ class ModelAdapter:
 class GemmaAdapter(ModelAdapter):
     """Adapter for Gemma 3 models.
 
-    Gemma 3's ``Gemma3ForCausalLM.model`` returns a ``Gemma3Model`` that nests
-    layers under ``.text_model.layers`` rather than ``.layers`` directly.
+    Gemma 3 nests decoder layers differently depending on context:
+      - HF transformers: model.model (Gemma3Model) -> language_model -> layers
+      - vLLM:            model (Gemma3ForConditionalGeneration) -> language_model -> model -> layers
+      - Text-only:       model.model -> layers  (Gemma3ForCausalLM)
+
+    This adapter searches all known paths from the top-level model.
     """
+
+    # Paths from the top-level model to the decoder layers, tried in order.
+    _LAYER_PATHS = [
+        "model.layers",                          # Gemma3ForCausalLM (text-only)
+        "model.language_model.layers",           # HF multimodal (language_model is Gemma3TextModel)
+        "model.language_model.model.layers",     # HF multimodal (language_model wraps further)
+        "language_model.model.layers",           # vLLM multimodal
+        "language_model.layers",                 # vLLM multimodal (text model variant)
+    ]
 
     @property
     def layers(self) -> nn.ModuleList:
-        inner = self.model.model
-        # Gemma 3 multimodal: Gemma3Model -> language_model (Gemma3TextModel) -> layers
-        if hasattr(inner, "language_model"):
-            lm = inner.language_model
-            if hasattr(lm, "layers"):
-                return lm.layers
-            if hasattr(lm, "model"):
-                return lm.model.layers
-        # Gemma 3 text-only: Gemma3TextModel -> layers
-        if hasattr(inner, "text_model"):
-            return inner.text_model.layers
-        # Some Gemma versions nest under .layers directly
-        if hasattr(inner, "layers"):
-            return inner.layers
+        for path in self._LAYER_PATHS:
+            obj = self.model
+            try:
+                for attr in path.split("."):
+                    obj = getattr(obj, attr)
+                if isinstance(obj, nn.ModuleList) and len(obj) > 0:
+                    return obj
+            except AttributeError:
+                continue
         raise AttributeError(
-            f"Cannot find decoder layers in {type(inner).__name__}. "
-            f"Available attributes: {[a for a in dir(inner) if not a.startswith('_')]}"
+            f"Cannot find decoder layers in {type(self.model).__name__}. "
+            f"Tried paths: {self._LAYER_PATHS}"
         )
 
 
