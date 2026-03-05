@@ -21,6 +21,7 @@ import torch
 from transformers import AutoTokenizer
 
 from src.steering.cache import ActivationCache
+from src.steering.model_adapter import resolve_layers_attr_path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -67,7 +68,15 @@ def get_activations_all_layers_nnsight(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    num_layers = len(nn_model.model.layers)
+    layers_path = resolve_layers_attr_path(nn_model.model)
+
+    def _resolve(root):
+        obj = root
+        for attr in layers_path.split("."):
+            obj = getattr(obj, attr)
+        return obj
+
+    num_layers = len(_resolve(nn_model.model))
     all_activations: dict[int, list[torch.Tensor]] = {l: [] for l in range(num_layers)}
 
     for i in range(0, len(texts), batch_size):
@@ -84,8 +93,9 @@ def get_activations_all_layers_nnsight(
 
         saved_outputs = {}
         with nn_model.trace(batch_texts, scan=False, validate=False):
+            nn_layers = _resolve(nn_model.model)
             for layer_idx in range(num_layers):
-                saved_outputs[layer_idx] = nn_model.model.layers[layer_idx].output[0].save()
+                saved_outputs[layer_idx] = nn_layers[layer_idx].output[0].save()
 
         for layer_idx in range(num_layers):
             hidden = saved_outputs[layer_idx].value  # (batch, seq, hidden)
@@ -126,7 +136,15 @@ def get_activations_all_layers_nnsight_last_token(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    num_layers = len(nn_model.model.layers)
+    layers_path = resolve_layers_attr_path(nn_model.model)
+
+    def _resolve(root):
+        obj = root
+        for attr in layers_path.split("."):
+            obj = getattr(obj, attr)
+        return obj
+
+    num_layers = len(_resolve(nn_model.model))
     all_activations: dict[int, list[torch.Tensor]] = {l: [] for l in range(num_layers)}
 
     for i in range(0, len(texts), batch_size):
@@ -143,8 +161,9 @@ def get_activations_all_layers_nnsight_last_token(
 
         saved_outputs = {}
         with nn_model.trace(batch_texts, scan=False, validate=False):
+            nn_layers = _resolve(nn_model.model)
             for layer_idx in range(num_layers):
-                saved_outputs[layer_idx] = nn_model.model.layers[layer_idx].output[0].save()
+                saved_outputs[layer_idx] = nn_layers[layer_idx].output[0].save()
 
         for layer_idx in range(num_layers):
             hidden = saved_outputs[layer_idx].value  # (batch, seq, hidden)

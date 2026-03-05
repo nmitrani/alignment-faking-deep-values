@@ -29,6 +29,7 @@ from src.steering.compute_steering_vector import (
     get_activations_all_layers_last_token,
     is_ab_format,
 )
+from src.steering.model_adapter import get_model_adapter
 
 try:
     import nnsight  # noqa: F401
@@ -140,7 +141,7 @@ def compute_steering_vectors_batch(
             model.eval()
             device = next(model.parameters()).device
 
-            num_layers = len(model.model.layers)
+            num_layers = get_model_adapter(model).num_layers
             for l in target_layers:
                 if l < 0 or l >= num_layers:
                     raise ValueError(f"Layer {l} out of range [0, {num_layers})")

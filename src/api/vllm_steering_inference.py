@@ -34,6 +34,7 @@ from pathlib import Path
 import torch
 
 from src.api.data_models import LLMResponse, Prompt
+from src.steering.model_adapter import get_model_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class _SteeringHookRegistrar:
 
     def __call__(self, worker_self):
         model = worker_self.model_runner.model
-        layer = model.model.layers[self.layer_idx]
+        layer = get_model_adapter(model).get_layer(self.layer_idx)
         param = next(model.parameters())
         sv = self.sv_cpu.to(device=param.device, dtype=param.dtype)
         alpha = self.alpha
@@ -207,7 +208,8 @@ class VLLMSteeringInferenceAPI:
     def _setup_steering_v0(self, model, steering_vector_path, steering_layer,
                            steering_alpha, tensor_parallel_size):
         """Register steering hooks via direct model access (vLLM v0)."""
-        num_layers = len(model.model.layers)
+        adapter = get_model_adapter(model)
+        num_layers = adapter.num_layers
 
         if steering_layer is not None:
             self.steering_layer = steering_layer
@@ -247,7 +249,7 @@ class VLLMSteeringInferenceAPI:
                 return (hidden,) + output[1:]
             return hidden
 
-        layer = model.model.layers[self.steering_layer]
+        layer = adapter.get_layer(self.steering_layer)
         self._hook_handle = layer.register_forward_hook(vllm_steering_hook)
         print(
             f"[VLLMSteeringInferenceAPI] Registered steering hook on layer {self.steering_layer} "

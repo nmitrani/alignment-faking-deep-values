@@ -27,6 +27,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.steering.cache import ActivationCache
+from src.steering.model_adapter import get_model_adapter
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -97,7 +98,8 @@ def get_activations_last_token(
     batch_size: int = 4,
 ) -> torch.Tensor:
     """Run forward passes and extract activation at the answer token position."""
-    layers = model.model.layers
+    adapter = get_model_adapter(model)
+    layers = adapter.layers
     all_activations = []
 
     for i in range(0, len(texts), batch_size):
@@ -142,7 +144,8 @@ def get_activations_all_layers_last_token(
     batch_size: int = 4,
 ) -> dict[int, torch.Tensor]:
     """Run forward passes and extract last-token activations at ALL layers."""
-    layers = model.model.layers
+    adapter = get_model_adapter(model)
+    layers = adapter.layers
     num_layers = len(layers)
     all_activations: dict[int, list[torch.Tensor]] = {l: [] for l in range(num_layers)}
 
@@ -200,7 +203,8 @@ def get_activations(
     batch_size: int = 4,
 ) -> torch.Tensor:
     """Run forward passes and extract mean-pooled activations at target_layer (legacy)."""
-    layers = model.model.layers
+    adapter = get_model_adapter(model)
+    layers = adapter.layers
     all_activations = []
 
     for i in range(0, len(texts), batch_size):
@@ -241,7 +245,8 @@ def get_activations_all_layers(
     batch_size: int = 4,
 ) -> dict[int, torch.Tensor]:
     """Run forward passes and extract mean-pooled activations at ALL layers (legacy)."""
-    layers = model.model.layers
+    adapter = get_model_adapter(model)
+    layers = adapter.layers
     num_layers = len(layers)
     all_activations: dict[int, list[torch.Tensor]] = {l: [] for l in range(num_layers)}
 
@@ -371,7 +376,7 @@ def compute_steering_vector(
 
         positive_texts, negative_texts = _prepare_texts(tokenizer, pairs)
 
-        num_layers = len(model.model.layers)
+        num_layers = get_model_adapter(model).num_layers
         if target_layer < 0 or target_layer >= num_layers:
             raise ValueError(f"target_layer {target_layer} out of range [0, {num_layers})")
 

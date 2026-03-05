@@ -22,6 +22,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.api.data_models import LLMResponse, Prompt
+from src.steering.model_adapter import get_model_adapter
 
 
 class HFSteeringInferenceAPI:
@@ -77,7 +78,8 @@ class HFSteeringInferenceAPI:
             self.steering_vector = None
 
         # Resolve layer
-        num_layers = len(self.model.model.layers)
+        self._adapter = get_model_adapter(self.model)
+        num_layers = self._adapter.num_layers
         if steering_layer is not None:
             self.steering_layer = steering_layer
         elif self.steering_vector is not None:
@@ -116,7 +118,7 @@ class HFSteeringInferenceAPI:
 
         hook_handle = None
         if self.steering_vector is not None and self.steering_layer is not None:
-            layer = self.model.model.layers[self.steering_layer]
+            layer = self._adapter.get_layer(self.steering_layer)
             sv = self.steering_vector
             alpha = self.steering_alpha
 
