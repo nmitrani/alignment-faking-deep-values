@@ -139,7 +139,7 @@ for seed in "${SEED_ARRAY[@]}"; do
         --model_name_or_path "$model_name" \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
         --dataset_path "$dataset_path" \
-        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
+        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
         --animal_welfare True \
         --output_dir "${output_base}/baseline" \
         --limit "$limit" \
@@ -167,7 +167,7 @@ for seed in "${SEED_ARRAY[@]}"; do
                 --steering_layer "$layer" \
                 --steering_alpha "$alpha" \
                 --dataset_path "$dataset_path" \
-                --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-lean-clear-future-nh.jinja2" \
+                --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
                 --animal_welfare True \
                 --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
                 --limit "$limit" \
