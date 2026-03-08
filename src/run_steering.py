@@ -156,6 +156,7 @@ async def main(cfg: SteeringExperimentConfig):
 
     # 1. Early check: skip if already completed (before expensive model loading)
     #    Build a temporary pipeline just to check completion status.
+    #    The check is seed-aware: we look for a results file matching this seed.
     if not cfg.force_rerun:
         tmp_pipeline = AlignmentFakingEval(
             model_module=None,
@@ -166,9 +167,17 @@ async def main(cfg: SteeringExperimentConfig):
             model_id=cfg.model_name_or_path,
             workers=cfg.workers,
         )
-        if tmp_pipeline.is_already_completed(subfolder="alignment_faking"):
-            print("Already completed, skipping...")
-            return
+        base_path = tmp_pipeline._get_base_path(subfolder="alignment_faking")
+        seed_files = sorted(base_path.glob(f"results_seed{cfg.seed}_*.json")) if base_path.exists() else []
+        if seed_files:
+            # Validate the latest seed file the same way is_already_completed does
+            import pandas as pd
+            df = pd.read_json(seed_files[-1])
+            empty = df["output"].apply(lambda x: len(x) > 0).value_counts().get(False, 0)
+            unsuccessful = df["success"].value_counts().get(False, 0)
+            if empty == 0 and unsuccessful == 0:
+                print(f"Already completed for seed {cfg.seed}, skipping...")
+                return
 
     # 2. Create inference API for the model under test
     if cfg.backend == "vllm":
