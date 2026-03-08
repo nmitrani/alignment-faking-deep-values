@@ -154,7 +154,23 @@ async def main(cfg: SteeringExperimentConfig):
         logging.getLogger().setLevel(logging.INFO)
         print(f"Logging to {log_file}")
 
-    # 1. Create inference API for the model under test
+    # 1. Early check: skip if already completed (before expensive model loading)
+    #    Build a temporary pipeline just to check completion status.
+    if not cfg.force_rerun:
+        tmp_pipeline = AlignmentFakingEval(
+            model_module=None,
+            classify_module=None,
+            output_dir=cfg.output_dir,
+            results_dir=cfg.results_dir,
+            system_prompt_path=cfg.system_prompt_path,
+            model_id=cfg.model_name_or_path,
+            workers=cfg.workers,
+        )
+        if tmp_pipeline.is_already_completed(subfolder="alignment_faking"):
+            print("Already completed, skipping...")
+            return
+
+    # 2. Create inference API for the model under test
     if cfg.backend == "vllm":
         from src.api.vllm_steering_inference import VLLMSteeringInferenceAPI
 
@@ -183,10 +199,10 @@ async def main(cfg: SteeringExperimentConfig):
     else:
         raise ValueError(f"Unknown backend: {cfg.backend!r}. Use 'hf' or 'vllm'.")
 
-    # 2. Create OpenRouter API for classifiers
+    # 3. Create OpenRouter API for classifiers
     classifier_api = InferenceAPI(num_threads=cfg.classifier_num_threads)
 
-    # 3. Create ModelEval with the selected API
+    # 4. Create ModelEval with the selected API
     model_module = ModelEval(
         model_id=cfg.model_name_or_path,
         system_prompt_path=cfg.system_prompt_path,
@@ -197,7 +213,7 @@ async def main(cfg: SteeringExperimentConfig):
         force_accept_reject_tags=cfg.force_accept_reject_tags,
     )
 
-    # 4. Create classifier with the OpenRouter API
+    # 5. Create classifier with the OpenRouter API
     if cfg.use_new_classifiers:
         classify_module = NewClassify(
             api=classifier_api,
@@ -211,7 +227,7 @@ async def main(cfg: SteeringExperimentConfig):
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
         )
 
-    # 5. Create pipeline
+    # 6. Create pipeline
     pipeline = AlignmentFakingEval(
         model_module=model_module,
         classify_module=classify_module,
@@ -221,11 +237,6 @@ async def main(cfg: SteeringExperimentConfig):
         model_id=cfg.model_name_or_path,
         workers=cfg.workers,
     )
-
-    # 6. Check if already completed
-    if pipeline.is_already_completed(subfolder="alignment_faking") and not cfg.force_rerun:
-        print("Already completed, skipping...")
-        return
 
     # 7. Load inputs
     if cfg.use_harmbench:
