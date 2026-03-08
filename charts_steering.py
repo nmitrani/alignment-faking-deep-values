@@ -192,7 +192,7 @@ def _load_files_multi_seed(file_list, key_extractor):
 
 # ── Load steering sweep ────────────────────────────────────────────────
 sweep_dir = "outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct"
-pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
+pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/animal-welfare_prompt-only_cot-informative/**/results_*.json"
 result_files = glob.glob(pattern, recursive=True)
 
 

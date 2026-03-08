@@ -52,13 +52,16 @@ clear_other_model_caches() {
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
 layers=${2:-"28"}
-alphas=${3:-"4.0,6.0,8.0"}
+alphas=${3:-"1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0"}
 limit=${4:-100}
 workers=${5:-10}
 dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
 extraction_method=${7:-"auto"}
 normalize=${8:-"true"}
-seeds=${9:-"42"}
+#seeds=${9:-"123"}
+seeds=${9:-"42,24,50,23,77"}
+
+export HF_TOKEN=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
 
 model_short=$(echo "$model_name" | tr '/' '_')
 output_base="./outputs/steering-sweep/${model_short}"
@@ -144,8 +147,7 @@ for seed in "${SEED_ARRAY[@]}"; do
         --output_dir "${output_base}/baseline" \
         --limit "$limit" \
         --workers "$workers" \
-        --seed "$seed" \
-        --force_rerun
+        --seed "$seed"
 
     # ── Sweep ──
     for layer in "${LAYER_ARRAY[@]}"; do
@@ -172,8 +174,7 @@ for seed in "${SEED_ARRAY[@]}"; do
                 --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
                 --limit "$limit" \
                 --workers "$workers" \
-                --seed "$seed" \
-                --force_rerun
+                --seed "$seed"
 
         done
     done
