@@ -4,8 +4,8 @@ set -eou pipefail
 # Sweep across layers and alpha multipliers for steering vector experiments.
 #
 # Computes steering vectors at each specified layer (loading the model once),
-# then runs the alignment faking evaluation at every (layer, alpha) combination.
-# Finally, produces a summary table and CSV with alignment faking metrics.
+# then launches one process per seed on a separate GPU.  Each process loads
+# the model once and iterates over all (layer, alpha) combinations.
 #
 # Usage:
 #   ./experiments/examples/4_sweep_steering.sh <model> <layers> <alphas> [limit] [workers]
@@ -14,19 +14,20 @@ set -eou pipefail
 #   # 8B model, 3 layers, 4 alphas (12 configs + baseline = 13 runs)
 #   ./experiments/examples/4_sweep_steering.sh meta-llama/Llama-3.1-8B-Instruct "8,16,24" "0.5,1.0,2.0,4.0"
 #
-#   # 405B model, sweep middle layers
-#   ./experiments/examples/4_sweep_steering.sh meta-llama/Llama-3.1-405B "20,40,60,80" "0.5,1.0,2.0,4.0"
+#   # 32B model on 4 GH200s (one seed per GPU)
+#   ./experiments/examples/4_sweep_steering.sh allenai/Olmo-3.1-32B-Instruct "28" "1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0"
 #
 # Arguments:
-#   $1 - HuggingFace model ID (default: meta-llama/Llama-3.1-8B-Instruct)
-#   $2 - Comma-separated layer indices (default: "8,16,24")
-#   $3 - Comma-separated alpha multipliers (default: "0.5,1.0,2.0,4.0")
-#   $4 - Number of prompts to evaluate (default: 63, the full animal welfare dataset)
-#   $5 - Number of concurrent workers (default: 10)
-#   $6 - Dataset path (default: steering_datasets/animal_welfare_ab.json)
-#   $7 - Extraction method: auto, last_token, mean_pool (default: auto)
-#   $8 - Normalize steering vectors: true/false (default: true)
-#   $9 - Comma-separated seeds (default: "42")
+#   $1  - HuggingFace model ID (default: allenai/Olmo-3.1-32B-Instruct)
+#   $2  - Comma-separated layer indices (default: "28")
+#   $3  - Comma-separated alpha multipliers (default: "1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0")
+#   $4  - Number of prompts to evaluate (default: 100)
+#   $5  - Number of concurrent workers (default: 10)
+#   $6  - Dataset path (default: steering_datasets/animal_welfare_ab.json)
+#   $7  - Extraction method: auto, last_token, mean_pool (default: auto)
+#   $8  - Normalize steering vectors: true/false (default: true)
+#   $9  - Comma-separated seeds (default: "42,24,50,23,77")
+#   $10 - Number of GPUs available (default: 4)
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
 layers=${2:-"28"}
@@ -36,9 +37,8 @@ workers=${5:-10}
 dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
 extraction_method=${7:-"auto"}
 normalize=${8:-"true"}
-#seeds=${9:-"123"}
 seeds=${9:-"42,24,50,23,77"}
-
+num_gpus=${10:-4}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 output_base="./outputs/steering-sweep/${model_short}"
@@ -48,7 +48,8 @@ IFS=',' read -ra LAYER_ARRAY <<< "$layers"
 IFS=',' read -ra ALPHA_ARRAY <<< "$alphas"
 IFS=',' read -ra SEED_ARRAY <<< "$seeds"
 
-total_runs=$(( (${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1) * ${#SEED_ARRAY[@]} ))
+configs_per_seed=$(( ${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1 ))
+total_runs=$(( configs_per_seed * ${#SEED_ARRAY[@]} ))
 
 echo "============================================================"
 echo "  Steering Vector Sweep"
@@ -62,7 +63,8 @@ echo "  Dataset: $dataset_path"
 echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
-echo "  Total:   $total_runs runs (${#SEED_ARRAY[@]} seeds x (${#LAYER_ARRAY[@]} layers x ${#ALPHA_ARRAY[@]} alphas + baseline))"
+echo "  GPUs:    $num_gpus"
+echo "  Total:   $total_runs runs (${#SEED_ARRAY[@]} seeds x $configs_per_seed configs)"
 echo "  Output:  $output_base"
 echo "============================================================"
 echo ""
@@ -70,7 +72,6 @@ echo ""
 # ============================================================
 # Step 1: Compute steering vectors for all layers (single model load)
 # ============================================================
-# Check which layers already have vectors computed
 missing_layers=""
 for layer in "${LAYER_ARRAY[@]}"; do
     sv_path="steering_vectors/${model_short}_layer${layer}.pt"
@@ -105,76 +106,64 @@ else
 fi
 
 # ============================================================
-# Step 2–3: Run baseline + all (layer, alpha) combos per seed
-# ============================================================
-run_num=0
-for seed in "${SEED_ARRAY[@]}"; do
-    # ── Baseline ──
-    run_num=$((run_num + 1))
-    echo ""
-    echo "=== Baseline (seed=${seed}) [$run_num/$total_runs] ==="
-    python -m src.run_steering \
-        --model_name_or_path "$model_name" \
-        --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
-        --dataset_path "$dataset_path" \
-        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
-        --animal_welfare True \
-        --output_dir "${output_base}/baseline" \
-        --limit "$limit" \
-        --workers "$workers" \
-        --seed "$seed"
-
-    # ── Sweep ──
-    for layer in "${LAYER_ARRAY[@]}"; do
-        sv_path="steering_vectors/${model_short}_layer${layer}.pt"
-
-        if [ ! -f "$sv_path" ]; then
-            echo "ERROR: Steering vector not found at ${sv_path}, skipping layer ${layer}"
-            continue
-        fi
-
-        for alpha in "${ALPHA_ARRAY[@]}"; do
-            run_num=$((run_num + 1))
-            echo ""
-            echo "=== layer=${layer}, alpha=${alpha}, seed=${seed} [$run_num/$total_runs] ==="
-            python -m src.run_steering \
-                --model_name_or_path "$model_name" \
-                --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
-                --steering_vector_path "$sv_path" \
-                --steering_layer "$layer" \
-                --steering_alpha "$alpha" \
-                --dataset_path "$dataset_path" \
-                --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
-                --animal_welfare True \
-                --output_dir "${output_base}/layer${layer}_alpha${alpha}" \
-                --limit "$limit" \
-                --workers "$workers" \
-                --seed "$seed"
-
-        done
-    done
-done
-
-# ============================================================
-# Step 4: Analyze results
+# Step 2: Launch one sweep process per seed, each on a different GPU.
+#         Each process loads the model once and iterates over all
+#         (layer, alpha) combinations.
 # ============================================================
 echo ""
-echo "=== Step 4: Analyzing results ==="
-python -m src.steering.analyze_sweep --results_dir "$output_base"
+echo "=== Step 2: Launching sweep processes (1 seed per GPU) ==="
+
+pids=()
+for i in "${!SEED_ARRAY[@]}"; do
+    seed=${SEED_ARRAY[$i]}
+    gpu_id=$((i % num_gpus))
+
+    echo "  Launching seed=${seed} on GPU ${gpu_id}"
+    CUDA_VISIBLE_DEVICES=$gpu_id python -m src.run_steering_sweep \
+        --model_name_or_path "$model_name" \
+        --layers "$layers" \
+        --alphas "$alphas" \
+        --seed "$seed" \
+        --steering_vectors_dir "steering_vectors" \
+        --dataset_path "$dataset_path" \
+        --output_base "$output_base" \
+        --limit "$limit" \
+        --workers "$workers" \
+        --tensor_parallel_size 1 \
+        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
+        --animal_welfare True \
+        --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
+        > "${output_base}/sweep_seed${seed}_gpu${gpu_id}.stdout.log" 2>&1 &
+    pids+=($!)
+
+    # If all GPUs are occupied, wait for the current batch before launching more
+    if (( (i + 1) % num_gpus == 0 )); then
+        echo "  Waiting for GPU batch (seeds ${SEED_ARRAY[@]:$((i - num_gpus + 1)):$num_gpus}) to finish..."
+        for pid in "${pids[@]}"; do
+            wait "$pid" || echo "  WARNING: process $pid exited with non-zero status"
+        done
+        pids=()
+    fi
+done
+
+# Wait for any remaining processes
+if (( ${#pids[@]} > 0 )); then
+    echo "  Waiting for remaining seeds to finish..."
+    for pid in "${pids[@]}"; do
+        wait "$pid" || echo "  WARNING: process $pid exited with non-zero status"
+    done
+fi
 
 # ============================================================
-# Step 5: LLM judge scoring (pro-animal + coherence)
+# Step 3: Analyze results
 # ============================================================
-# echo ""
-# echo "=== Step 5: Running LLM judge on all results ==="
-# python -m experiments.judge_sweep_results \
-#     --results_dir "$output_base" \
-#     --output "${output_base}/judge_scores.csv"
+echo ""
+echo "=== Step 3: Analyzing results ==="
+python -m src.steering.analyze_sweep --results_dir "$output_base"
 
 echo ""
 echo "============================================================"
 echo "  Sweep complete!"
 echo "  Results:       ${output_base}/"
 echo "  Sweep summary: ${output_base}/sweep_summary.csv"
-echo "  Judge scores:  ${output_base}/judge_scores.csv"
 echo "============================================================"

@@ -39,7 +39,7 @@ from src.steering.model_adapter import get_model_adapter, get_num_hidden_layers
 logger = logging.getLogger(__name__)
 
 
-def _is_decode_step(hidden_states: torch.Tensor) -> bool:
+def _is_decode_step(hidden_states: torch.Tensor, max_batch_size: int = 64) -> bool:
     """Heuristic to detect decode vs prefill in vLLM.
 
     During prefill, the sequence dimension is large (many tokens).
@@ -48,9 +48,11 @@ def _is_decode_step(hidden_states: torch.Tensor) -> bool:
     if the total number of tokens is "small" (typical decode batch).
 
     For standard HF-style (batch, seq, hidden): seq_len == 1 means decode.
-    For vLLM flattened (num_tokens, hidden): num_tokens <= batch_size.
-    We use a threshold of 64 tokens as a conservative upper bound for
-    typical batch sizes — prefill will have hundreds or thousands of tokens.
+    For vLLM flattened (num_tokens, hidden): num_tokens <= max_batch_size.
+
+    Args:
+        max_batch_size: Upper bound for decode batch size. During prefill the
+            token count will be much larger than this.
     """
     if hidden_states.dim() == 3:
         # (batch, seq, hidden) — standard format
@@ -59,9 +61,13 @@ def _is_decode_step(hidden_states: torch.Tensor) -> bool:
         # (num_tokens, hidden) — vLLM flattened format
         # During decode, num_tokens == batch_size (one token per sequence)
         # During prefill, num_tokens == total prompt tokens (much larger)
-        # Use 64 as threshold — conservative for typical batch sizes
-        return hidden_states.shape[0] <= 64
+        return hidden_states.shape[0] <= max_batch_size
     return True  # Default to applying steering if shape is unexpected
+
+
+# Module-level storage for hook handles in vLLM v1 worker processes.
+# Persists across collective_rpc calls within the same worker.
+_worker_hook_handles: list = []
 
 
 class _SteeringHookRegistrar:
@@ -71,10 +77,12 @@ class _SteeringHookRegistrar:
     pickle, which is required for ``collective_rpc`` in vLLM v1.
     """
 
-    def __init__(self, layer_idx: int, sv_cpu: torch.Tensor, alpha: float):
+    def __init__(self, layer_idx: int, sv_cpu: torch.Tensor, alpha: float,
+                 max_batch_size: int = 64):
         self.layer_idx = layer_idx
         self.sv_cpu = sv_cpu
         self.alpha = alpha
+        self.max_batch_size = max_batch_size
 
     def __call__(self, worker_self):
         model = worker_self.model_runner.model
@@ -82,25 +90,36 @@ class _SteeringHookRegistrar:
         param = next(model.parameters())
         sv = self.sv_cpu.to(device=param.device, dtype=param.dtype)
         alpha = self.alpha
+        max_batch_size = self.max_batch_size
 
         def hook(module, input, output):
             if isinstance(output, tuple) and len(output) == 2:
                 hidden_states, residual = output
                 # Only steer during decode, not prefill
-                if not _is_decode_step(hidden_states):
+                if not _is_decode_step(hidden_states, max_batch_size):
                     return output
                 residual = residual + alpha * sv
                 return (hidden_states, residual)
             hidden = output[0] if isinstance(output, tuple) else output
             # Only steer during decode, not prefill
-            if not _is_decode_step(hidden):
+            if not _is_decode_step(hidden, max_batch_size):
                 return output
             hidden = hidden + alpha * sv
             if isinstance(output, tuple):
                 return (hidden,) + output[1:]
             return hidden
 
-        layer.register_forward_hook(hook)
+        handle = layer.register_forward_hook(hook)
+        _worker_hook_handles.append(handle)
+
+
+class _SteeringHookRemover:
+    """Picklable callable that removes all steering hooks from a vLLM worker."""
+
+    def __call__(self, worker_self):
+        for handle in _worker_hook_handles:
+            handle.remove()
+        _worker_hook_handles.clear()
 
 
 class VLLMSteeringInferenceAPI:
@@ -146,6 +165,7 @@ class VLLMSteeringInferenceAPI:
         self.max_batch_size = max_batch_size
         self.batch_timeout = batch_timeout
         self.steering_alpha = steering_alpha
+        self._tensor_parallel_size = tensor_parallel_size
 
         # Build vLLM engine
         llm_kwargs = {
@@ -231,18 +251,19 @@ class VLLMSteeringInferenceAPI:
         )
 
         alpha = self.steering_alpha
+        mbs = self.max_batch_size
 
         def vllm_steering_hook(module, input, output):
             if isinstance(output, tuple) and len(output) == 2:
                 hidden_states, residual = output
                 # Only steer during decode, not prefill
-                if not _is_decode_step(hidden_states):
+                if not _is_decode_step(hidden_states, mbs):
                     return output
                 residual = residual + alpha * sv
                 return (hidden_states, residual)
             hidden = output[0] if isinstance(output, tuple) else output
             # Only steer during decode, not prefill
-            if not _is_decode_step(hidden):
+            if not _is_decode_step(hidden, mbs):
                 return output
             hidden = hidden + alpha * sv
             if isinstance(output, tuple):
@@ -302,7 +323,9 @@ class VLLMSteeringInferenceAPI:
         Uses ``_SteeringHookRegistrar`` (a picklable class) instead of a
         closure so that vLLM's serialization layer can send it to workers.
         """
-        registrar = _SteeringHookRegistrar(self.steering_layer, sv.cpu(), alpha)
+        registrar = _SteeringHookRegistrar(
+            self.steering_layer, sv.cpu(), alpha, self.max_batch_size
+        )
         try:
             self.llm.collective_rpc(registrar)
         except Exception as e:
@@ -310,6 +333,43 @@ class VLLMSteeringInferenceAPI:
                 f"Failed to register steering hooks via collective_rpc: {e}. "
                 "Steering requires enforce_eager=True."
             ) from e
+
+    def update_steering(
+        self,
+        steering_vector_path: str | Path,
+        steering_layer: int | None,
+        steering_alpha: float,
+    ):
+        """Swap steering config without reloading the model.
+
+        Removes any existing hooks, then registers new ones for the given
+        vector / layer / alpha combination.
+        """
+        self.clear_steering()
+        self.steering_alpha = steering_alpha
+        try:
+            model = self._get_model()
+            self._setup_steering_v0(
+                model, steering_vector_path, steering_layer,
+                steering_alpha, self._tensor_parallel_size,
+            )
+        except RuntimeError:
+            self._setup_steering_v1(
+                steering_vector_path, steering_layer, steering_alpha,
+            )
+
+    def clear_steering(self):
+        """Remove all steering hooks (returns to baseline behaviour)."""
+        # v0: local hook on the driver worker
+        if self._hook_handle is not None:
+            self._hook_handle.remove()
+            self._hook_handle = None
+        # v1 / TP>1: hooks registered on remote workers via rpc
+        try:
+            self.llm.collective_rpc(_SteeringHookRemover())
+        except Exception:
+            pass  # no rpc hooks to remove, or rpc unavailable
+        self.steering_layer = None
 
     def _prompt_to_text(self, prompt: Prompt) -> str:
         """Convert a Prompt (list of ChatMessages) to a text string using the chat template."""
