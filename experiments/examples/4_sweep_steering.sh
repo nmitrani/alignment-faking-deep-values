@@ -26,6 +26,19 @@ set -eou pipefail
 #   $8  - Normalize steering vectors: true/false (default: true)
 #   $9  - Comma-separated seeds (default: "42,24,50,23,77")
 #   $10 - Number of GPUs available (default: 4)
+#   --force_rerun  - Pass --force_rerun to the sweep workers
+
+# Parse --force_rerun flag from any position
+force_rerun=""
+args=()
+for arg in "$@"; do
+    if [ "$arg" = "--force_rerun" ]; then
+        force_rerun="--force_rerun"
+    else
+        args+=("$arg")
+    fi
+done
+set -- "${args[@]}"
 
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
 layers=${2:-"28"}
@@ -62,6 +75,7 @@ echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
+echo "  Force:   ${force_rerun:-no}"
 echo "  Total:   $total_tasks tasks (${#SEED_ARRAY[@]} seeds x $configs_per_seed configs)"
 echo "  Output:  $output_base"
 echo "============================================================"
@@ -158,6 +172,7 @@ for (( gpu=0; gpu<num_gpus; gpu++ )); do
         --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
+        $force_rerun \
         > "${output_base}/worker_gpu${gpu}.stdout.log" 2>&1 &
     pids+=($!)
 done
