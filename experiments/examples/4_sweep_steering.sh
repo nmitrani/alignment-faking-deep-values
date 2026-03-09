@@ -61,7 +61,6 @@ normalize=${8:-"true"}
 #seeds=${9:-"123"}
 seeds=${9:-"42,24,50,23,77"}
 
-export HF_TOKEN=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
 
 model_short=$(echo "$model_name" | tr '/' '_')
 output_base="./outputs/steering-sweep/${model_short}"
