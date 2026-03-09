@@ -28,28 +28,6 @@ set -eou pipefail
 #   $8 - Normalize steering vectors: true/false (default: true)
 #   $9 - Comma-separated seeds (default: "42")
 
-# Clear HuggingFace hub cache for all models except the one we're about to run,
-# to avoid running into disk quota limits.
-clear_other_model_caches() {
-    local keep_model="$1"
-    local hub_cache="${HF_HOME:-${HOME}/.cache/huggingface}/hub"
-    if [ ! -d "$hub_cache" ]; then
-        return
-    fi
-    # Model dirs in the hub cache look like models--org--name
-    local keep_pattern
-    keep_pattern=$(echo "$keep_model" | tr '/' '--')
-    for model_dir in "$hub_cache"/models--*; do
-        [ -d "$model_dir" ] || continue
-        local dir_name
-        dir_name=$(basename "$model_dir")
-        if [ "$dir_name" != "models--${keep_pattern}" ]; then
-            echo "Clearing cached model: $dir_name"
-            rm -rf "$model_dir"
-        fi
-    done
-}
-
 model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
 layers=${2:-"28"}
 alphas=${3:-"1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0"}
@@ -106,8 +84,6 @@ for layer in "${LAYER_ARRAY[@]}"; do
         echo "Steering vector already exists: ${sv_path}"
     fi
 done
-
-clear_other_model_caches "$model_name"
 
 if [ -n "$missing_layers" ]; then
     echo ""
