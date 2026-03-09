@@ -229,7 +229,7 @@ for fp in baseline_by_config.get("baseline", []):
 # ── Load negative alpha results ────────────────────────────────────────
 neg_seed_rows = []
 if args.include_negative:
-    neg_pattern = f"{args.negative_dir}/layer*_alpha-*/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
+    neg_pattern = f"{args.negative_dir}/layer*_alpha-[12345]/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
     neg_files = glob.glob(neg_pattern, recursive=True)
     def _neg_sweep_key(fp):
         m = re.search(r"(layer\d+_alpha-[\d.]+)", fp)
@@ -254,7 +254,7 @@ labels_ordered = df.drop_duplicates("label").sort_values(["layer", "alpha"])["la
 if args.include_negative and neg_seed_rows: 
     all_rows_neg = _aggregate_seeds(neg_seed_rows) + _aggregate_seeds(baseline_seed_rows) + _aggregate_seeds(all_seed_rows)
     df_neg = pd.DataFrame(all_rows_neg).sort_values(["layer", "alpha", "tier"])
-    labels_neg = df_neg.drop_duplicates("label").sort_values("alpha")["label"].tolist()
+    labels_neg = df_neg.drop_duplicates("label").sort_values(["alpha", "layer"])["label"].tolist()
 
 # Iterator used to run every graph section once for positive-only, and again for combined
 _graph_iters = [(df, labels_ordered, "")] 
