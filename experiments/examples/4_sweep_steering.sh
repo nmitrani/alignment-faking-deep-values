@@ -3,18 +3,16 @@ set -eou pipefail
 
 # Sweep across layers and alpha multipliers for steering vector experiments.
 #
-# Computes steering vectors at each specified layer (loading the model once),
-# then launches one process per seed on a separate GPU.  Each process loads
-# the model once and iterates over all (layer, alpha) combinations.
+# Computes steering vectors, generates a task queue, then launches one worker
+# process per GPU.  Each worker loads the model once and dynamically pulls
+# tasks (individual seed/layer/alpha runs) from a shared queue until none
+# remain.  No GPU sits idle while work is available.
 #
 # Usage:
 #   ./experiments/examples/4_sweep_steering.sh <model> <layers> <alphas> [limit] [workers]
 #
 # Examples:
-#   # 8B model, 3 layers, 4 alphas (12 configs + baseline = 13 runs)
-#   ./experiments/examples/4_sweep_steering.sh meta-llama/Llama-3.1-8B-Instruct "8,16,24" "0.5,1.0,2.0,4.0"
-#
-#   # 32B model on 4 GH200s (one seed per GPU)
+#   # 32B model on 4 GH200s (one model load per GPU, tasks distributed dynamically)
 #   ./experiments/examples/4_sweep_steering.sh allenai/Olmo-3.1-32B-Instruct "28" "1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0"
 #
 # Arguments:
@@ -49,7 +47,7 @@ IFS=',' read -ra ALPHA_ARRAY <<< "$alphas"
 IFS=',' read -ra SEED_ARRAY <<< "$seeds"
 
 configs_per_seed=$(( ${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1 ))
-total_runs=$(( configs_per_seed * ${#SEED_ARRAY[@]} ))
+total_tasks=$(( configs_per_seed * ${#SEED_ARRAY[@]} ))
 
 echo "============================================================"
 echo "  Steering Vector Sweep"
@@ -64,7 +62,7 @@ echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
-echo "  Total:   $total_runs runs (${#SEED_ARRAY[@]} seeds x $configs_per_seed configs)"
+echo "  Total:   $total_tasks tasks (${#SEED_ARRAY[@]} seeds x $configs_per_seed configs)"
 echo "  Output:  $output_base"
 echo "============================================================"
 echo ""
@@ -106,59 +104,102 @@ else
 fi
 
 # ============================================================
-# Step 2: Launch one sweep process per seed, each on a different GPU.
-#         Each process loads the model once and iterates over all
-#         (layer, alpha) combinations.
+# Step 2: Generate task queue
 # ============================================================
 echo ""
-echo "=== Step 2: Launching sweep processes (1 seed per GPU) ==="
+echo "=== Step 2: Generating task queue ($total_tasks tasks) ==="
 
+task_dir="${output_base}/.task_queue"
+mkdir -p "${task_dir}/pending" "${task_dir}/running" "${task_dir}/done" "${task_dir}/failed"
+
+# Clean any leftover tasks from previous runs
+rm -f "${task_dir}/pending/"task_*.json "${task_dir}/running/"task_*.json
+
+task_id=0
+for seed in "${SEED_ARRAY[@]}"; do
+    # Baseline task
+    cat > "${task_dir}/pending/task_$(printf '%04d' $task_id).json" <<TASK_EOF
+{"seed": ${seed}, "steering_vector_path": null, "steering_layer": null, "steering_alpha": 0, "output_dir": "${output_base}/baseline"}
+TASK_EOF
+    task_id=$((task_id + 1))
+
+    # Steered tasks
+    for layer in "${LAYER_ARRAY[@]}"; do
+        sv_path="steering_vectors/${model_short}_layer${layer}.pt"
+        for alpha in "${ALPHA_ARRAY[@]}"; do
+            cat > "${task_dir}/pending/task_$(printf '%04d' $task_id).json" <<TASK_EOF
+{"seed": ${seed}, "steering_vector_path": "${sv_path}", "steering_layer": ${layer}, "steering_alpha": ${alpha}, "output_dir": "${output_base}/layer${layer}_alpha${alpha}"}
+TASK_EOF
+            task_id=$((task_id + 1))
+        done
+    done
+done
+
+echo "  Created $task_id task files in ${task_dir}/pending/"
+
+# ============================================================
+# Step 3: Launch GPU workers (one per GPU, dynamic task claiming)
+# ============================================================
+echo ""
+echo "=== Step 3: Launching $num_gpus GPU workers ==="
+
+mkdir -p "$output_base"
 pids=()
-for i in "${!SEED_ARRAY[@]}"; do
-    seed=${SEED_ARRAY[$i]}
-    gpu_id=$((i % num_gpus))
-
-    echo "  Launching seed=${seed} on GPU ${gpu_id}"
-    CUDA_VISIBLE_DEVICES=$gpu_id python -m src.run_steering_sweep \
+for (( gpu=0; gpu<num_gpus; gpu++ )); do
+    echo "  Starting worker on GPU $gpu"
+    CUDA_VISIBLE_DEVICES=$gpu python -m src.run_steering_sweep \
         --model_name_or_path "$model_name" \
-        --layers "$layers" \
-        --alphas "$alphas" \
-        --seed "$seed" \
-        --steering_vectors_dir "steering_vectors" \
-        --dataset_path "$dataset_path" \
+        --task_queue_dir "$task_dir" \
         --output_base "$output_base" \
+        --dataset_path "$dataset_path" \
         --limit "$limit" \
         --workers "$workers" \
         --tensor_parallel_size 1 \
         --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
-        > "${output_base}/sweep_seed${seed}_gpu${gpu_id}.stdout.log" 2>&1 &
+        > "${output_base}/worker_gpu${gpu}.stdout.log" 2>&1 &
     pids+=($!)
-
-    # If all GPUs are occupied, wait for the current batch before launching more
-    if (( (i + 1) % num_gpus == 0 )); then
-        echo "  Waiting for GPU batch (seeds ${SEED_ARRAY[@]:$((i - num_gpus + 1)):$num_gpus}) to finish..."
-        for pid in "${pids[@]}"; do
-            wait "$pid" || echo "  WARNING: process $pid exited with non-zero status"
-        done
-        pids=()
-    fi
 done
 
-# Wait for any remaining processes
-if (( ${#pids[@]} > 0 )); then
-    echo "  Waiting for remaining seeds to finish..."
-    for pid in "${pids[@]}"; do
-        wait "$pid" || echo "  WARNING: process $pid exited with non-zero status"
+echo "  Waiting for all workers to finish..."
+exit_code=0
+for pid in "${pids[@]}"; do
+    wait "$pid" || {
+        echo "  WARNING: worker $pid exited with non-zero status"
+        exit_code=1
+    }
+done
+
+# ============================================================
+# Step 4: Report task status
+# ============================================================
+echo ""
+n_done=$(find "${task_dir}/done" -name "task_*.json" 2>/dev/null | wc -l | tr -d ' ')
+n_failed=$(find "${task_dir}/failed" -name "task_*.json" 2>/dev/null | wc -l | tr -d ' ')
+n_running=$(find "${task_dir}/running" -name "task_*.json" 2>/dev/null | wc -l | tr -d ' ')
+n_pending=$(find "${task_dir}/pending" -name "task_*.json" 2>/dev/null | wc -l | tr -d ' ')
+
+echo "  Task status:  done=$n_done  failed=$n_failed  running=$n_running  pending=$n_pending"
+
+if (( n_failed > 0 )); then
+    echo "  Failed tasks:"
+    for f in "${task_dir}/failed/"task_*.json; do
+        echo "    - $(cat "$f")"
     done
 fi
 
+if (( n_running > 0 )); then
+    echo "  WARNING: $n_running tasks stuck in running/ (worker crash?)"
+    echo "  Re-queuing to pending/ for next run..."
+    mv "${task_dir}/running/"task_*.json "${task_dir}/pending/"
+fi
+
 # ============================================================
-# Step 3: Analyze results
+# Step 5: Analyze results
 # ============================================================
 echo ""
-echo "=== Step 3: Analyzing results ==="
+echo "=== Step 5: Analyzing results ==="
 python -m src.steering.analyze_sweep --results_dir "$output_base"
 
 echo ""
@@ -167,3 +208,5 @@ echo "  Sweep complete!"
 echo "  Results:       ${output_base}/"
 echo "  Sweep summary: ${output_base}/sweep_summary.csv"
 echo "============================================================"
+
+exit $exit_code

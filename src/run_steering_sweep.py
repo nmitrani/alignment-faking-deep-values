@@ -1,15 +1,31 @@
-"""Run a steering vector sweep: load the model once, iterate over configs.
+"""Run a steering vector sweep with dynamic GPU work-stealing.
 
-Loads the vLLM model a single time, then runs baseline + every (layer, alpha)
-combination for a given seed.  Designed to be launched once per GPU by the
-sweep shell script (one seed per GPU).
+Two modes of operation:
 
-Usage:
-    CUDA_VISIBLE_DEVICES=0 python -m src.run_steering_sweep \
-        --model_name_or_path allenai/Olmo-3.1-32B-Instruct \
-        --layers "28" \
-        --alphas "1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0" \
-        --seed 42 \
+1. **Direct mode** (original): pass --layers, --alphas, --seed explicitly.
+   Loads the model once and iterates over all (layer, alpha) combinations
+   for that seed.
+
+2. **Worker mode** (--task_queue_dir): each GPU worker loads the model once,
+   then atomically claims tasks from a shared directory until none remain.
+   Tasks are individual JSON files in ``<task_queue_dir>/pending/``.
+   Workers move claimed tasks to ``running/``, then to ``done/`` on success
+   or ``failed/`` on error.
+
+Worker mode is designed for the sweep bash script, which generates the task
+files and launches one worker per GPU.  Tasks are distributed dynamically
+so no GPU sits idle while work remains.
+
+Usage (direct mode):
+    CUDA_VISIBLE_DEVICES=0 python -m src.run_steering_sweep \\
+        --model_name_or_path allenai/Olmo-3.1-32B-Instruct \\
+        --layers "28" --alphas "1.0,2.0,3.0" --seed 42 \\
+        --output_base ./outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct
+
+Usage (worker mode):
+    CUDA_VISIBLE_DEVICES=0 python -m src.run_steering_sweep \\
+        --model_name_or_path allenai/Olmo-3.1-32B-Instruct \\
+        --task_queue_dir ./outputs/steering-sweep/.task_queue \\
         --output_base ./outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct
 """
 
@@ -17,6 +33,7 @@ import multiprocessing
 import os
 import asyncio
 import dataclasses
+import json
 import logging
 import random
 from pathlib import Path
@@ -51,11 +68,14 @@ class SweepConfig:
     # model
     model_name_or_path: str = "allenai/Olmo-3.1-32B-Instruct"
 
-    # sweep parameters
+    # ── direct-mode sweep parameters ──
     layers: str = "28"  # comma-separated layer indices
     alphas: str = "1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0"  # comma-separated
     seed: int = 42
     steering_vectors_dir: str = "steering_vectors"
+
+    # ── worker-mode ──
+    task_queue_dir: str | None = None  # set to enable worker mode
 
     # vLLM options
     tensor_parallel_size: int = 1
@@ -89,6 +109,9 @@ class SweepConfig:
     workers: int = 10
     force_rerun: bool = False
     log_to_file: bool = True
+
+
+# ─── Shared helpers ───────────────────────────────────────────────
 
 
 def _is_completed(
@@ -161,7 +184,142 @@ async def _run_single(model_module, classify_module, inputs, cfg, output_dir, se
     print(f"  Results saved to {results_file}")
 
 
-async def main(cfg: SweepConfig):
+def _load_model_and_modules(cfg):
+    """Load the vLLM model, classifier, and evaluation modules once."""
+    from src.api.vllm_steering_inference import VLLMSteeringInferenceAPI
+
+    model_api = VLLMSteeringInferenceAPI(
+        model_name_or_path=cfg.model_name_or_path,
+        steering_vector_path=None,
+        tensor_parallel_size=cfg.tensor_parallel_size,
+        gpu_memory_utilization=cfg.gpu_memory_utilization,
+        max_model_len=cfg.max_model_len,
+        max_batch_size=cfg.vllm_batch_size,
+        batch_timeout=cfg.vllm_batch_timeout,
+    )
+
+    classifier_api = InferenceAPI(num_threads=cfg.classifier_num_threads)
+
+    model_module = ModelEval(
+        model_id=cfg.model_name_or_path,
+        system_prompt_path=cfg.system_prompt_path,
+        free_tier_instruction_format_path=cfg.free_tier_instruction_format_path,
+        paid_tier_instruction_format_path=cfg.paid_tier_instruction_format_path,
+        api=model_api,
+        use_hidden_scratchpad=cfg.use_hidden_scratchpad,
+        force_accept_reject_tags=cfg.force_accept_reject_tags,
+    )
+
+    if cfg.use_new_classifiers:
+        classify_module = NewClassify(
+            api=classifier_api,
+            use_hidden_scratchpad=cfg.use_hidden_scratchpad,
+            animal_welfare=cfg.animal_welfare,
+            classifier_model_id=cfg.classifier_model_id,
+        )
+    else:
+        classify_module = ClassicClassify(
+            api=classifier_api,
+            use_hidden_scratchpad=cfg.use_hidden_scratchpad,
+        )
+
+    inputs = load_animal_welfare_prompts(cfg.dataset_path, cfg.limit)
+    print(f"Loaded {len(inputs)} inputs")
+
+    return model_api, model_module, classify_module, inputs
+
+
+# ─── Worker mode ──────────────────────────────────────────────────
+
+
+def _claim_task(pending_dir: Path, running_dir: Path) -> Path | None:
+    """Atomically claim the next pending task via os.rename().
+
+    os.rename() is atomic on POSIX when source and destination are on the
+    same filesystem.  If two workers race on the same file, one gets
+    FileNotFoundError and moves on to the next.
+    """
+    for task_file in sorted(pending_dir.glob("task_*.json")):
+        dest = running_dir / task_file.name
+        try:
+            task_file.rename(dest)
+            return dest  # claimed
+        except FileNotFoundError:
+            continue  # another worker got it first
+    return None  # no tasks left
+
+
+async def _worker_main(cfg: SweepConfig):
+    """Worker mode: load model once, pull tasks from shared queue."""
+    task_dir = Path(cfg.task_queue_dir)
+    pending_dir = task_dir / "pending"
+    running_dir = task_dir / "running"
+    done_dir = task_dir / "done"
+    failed_dir = task_dir / "failed"
+
+    for d in (running_dir, done_dir, failed_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    pid = os.getpid()
+    gpu = os.environ.get("CUDA_VISIBLE_DEVICES", "?")
+    print(f"[Worker pid={pid} gpu={gpu}] Starting, loading model...")
+
+    if cfg.log_to_file:
+        output_base = Path(cfg.output_base)
+        output_base.mkdir(parents=True, exist_ok=True)
+        log_file = output_base / f"worker_gpu{gpu}.log"
+        handler = logging.FileHandler(log_file)
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
+        logging.getLogger().addHandler(handler)
+        logging.getLogger().setLevel(logging.INFO)
+
+    model_api, model_module, classify_module, inputs = _load_model_and_modules(cfg)
+
+    tasks_completed = 0
+    while True:
+        task_path = _claim_task(pending_dir, running_dir)
+        if task_path is None:
+            break
+
+        task = json.loads(task_path.read_text())
+        seed = task["seed"]
+        output_dir = Path(task["output_dir"])
+
+        # Configure steering
+        if task.get("steering_vector_path"):
+            sv_path = str(_resolve_path(task["steering_vector_path"]))
+            layer = task["steering_layer"]
+            alpha = task["steering_alpha"]
+            model_api.update_steering(sv_path, layer, alpha)
+            label = f"layer={layer}, alpha={alpha}, seed={seed}"
+        else:
+            model_api.clear_steering()
+            label = f"baseline, seed={seed}"
+
+        print(f"[Worker gpu={gpu}] Running: {label}")
+
+        try:
+            await _run_single(
+                model_module, classify_module, inputs, cfg, output_dir, seed
+            )
+            task_path.rename(done_dir / task_path.name)
+            tasks_completed += 1
+        except Exception as e:
+            print(f"[Worker gpu={gpu}] FAILED: {label} — {e}")
+            task_path.rename(failed_dir / task_path.name)
+
+    model_api.clear_steering()
+    print(f"[Worker gpu={gpu}] Done. Completed {tasks_completed} tasks.")
+
+
+# ─── Direct mode ──────────────────────────────────────────────────
+
+
+async def _direct_main(cfg: SweepConfig):
+    """Direct mode: run all (layer, alpha) combos for a single seed."""
     layer_list = [int(l.strip()) for l in cfg.layers.split(",")]
     alpha_list = [float(a.strip()) for a in cfg.alphas.split(",")]
     model_short = cfg.model_name_or_path.replace("/", "_")
@@ -194,52 +352,9 @@ async def main(cfg: SweepConfig):
         logging.getLogger().setLevel(logging.INFO)
         print(f"  Logging to {log_file}")
 
-    # ── 1. Load model once (no steering) ──────────────────────────
-    from src.api.vllm_steering_inference import VLLMSteeringInferenceAPI
+    model_api, model_module, classify_module, inputs = _load_model_and_modules(cfg)
 
-    model_api = VLLMSteeringInferenceAPI(
-        model_name_or_path=cfg.model_name_or_path,
-        steering_vector_path=None,
-        tensor_parallel_size=cfg.tensor_parallel_size,
-        gpu_memory_utilization=cfg.gpu_memory_utilization,
-        max_model_len=cfg.max_model_len,
-        max_batch_size=cfg.vllm_batch_size,
-        batch_timeout=cfg.vllm_batch_timeout,
-    )
-
-    # ── 2. Classifier API (external service, reusable) ────────────
-    classifier_api = InferenceAPI(num_threads=cfg.classifier_num_threads)
-
-    # ── 3. ModelEval (reusable across configs) ────────────────────
-    model_module = ModelEval(
-        model_id=cfg.model_name_or_path,
-        system_prompt_path=cfg.system_prompt_path,
-        free_tier_instruction_format_path=cfg.free_tier_instruction_format_path,
-        paid_tier_instruction_format_path=cfg.paid_tier_instruction_format_path,
-        api=model_api,
-        use_hidden_scratchpad=cfg.use_hidden_scratchpad,
-        force_accept_reject_tags=cfg.force_accept_reject_tags,
-    )
-
-    # ── 4. Classifier module (reusable) ───────────────────────────
-    if cfg.use_new_classifiers:
-        classify_module = NewClassify(
-            api=classifier_api,
-            use_hidden_scratchpad=cfg.use_hidden_scratchpad,
-            animal_welfare=cfg.animal_welfare,
-            classifier_model_id=cfg.classifier_model_id,
-        )
-    else:
-        classify_module = ClassicClassify(
-            api=classifier_api,
-            use_hidden_scratchpad=cfg.use_hidden_scratchpad,
-        )
-
-    # ── 5. Load inputs ────────────────────────────────────────────
-    inputs = load_animal_welfare_prompts(cfg.dataset_path, cfg.limit)
-    print(f"Loaded {len(inputs)} inputs")
-
-    # ── 6. Baseline (no steering) ─────────────────────────────────
+    # ── Baseline ──
     run_num = 1
     print(f"\n[{run_num}/{total_runs}] Baseline (seed={cfg.seed})")
     await _run_single(
@@ -251,18 +366,22 @@ async def main(cfg: SweepConfig):
         seed=cfg.seed,
     )
 
-    # ── 7. Sweep (layer x alpha) ─────────────────────────────────
+    # ── Sweep ──
     for layer in layer_list:
         sv_filename = f"{model_short}_layer{layer}.pt"
         sv_path = _resolve_path(str(Path(cfg.steering_vectors_dir) / sv_filename))
 
         if not sv_path.exists():
-            print(f"  WARNING: Steering vector not found: {sv_path}, skipping layer {layer}")
+            print(
+                f"  WARNING: Steering vector not found: {sv_path}, skipping layer {layer}"
+            )
             continue
 
         for alpha in alpha_list:
             run_num += 1
-            print(f"\n[{run_num}/{total_runs}] layer={layer}, alpha={alpha}, seed={cfg.seed}")
+            print(
+                f"\n[{run_num}/{total_runs}] layer={layer}, alpha={alpha}, seed={cfg.seed}"
+            )
             model_api.update_steering(str(sv_path), layer, alpha)
 
             await _run_single(
@@ -274,9 +393,18 @@ async def main(cfg: SweepConfig):
                 seed=cfg.seed,
             )
 
-    # ── 8. Cleanup ────────────────────────────────────────────────
     model_api.clear_steering()
     print(f"\n=== Sweep complete for seed {cfg.seed} ===")
+
+
+# ─── Entry point ──────────────────────────────────────────────────
+
+
+async def main(cfg: SweepConfig):
+    if cfg.task_queue_dir:
+        await _worker_main(cfg)
+    else:
+        await _direct_main(cfg)
 
 
 if __name__ == "__main__":
