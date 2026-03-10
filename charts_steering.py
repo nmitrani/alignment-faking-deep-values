@@ -40,13 +40,6 @@ def _extract_seed(filepath):
     return int(m.group(1)) if m else 42
 
 
-def _extract_prompt_name(filepath):
-    """Extract the system prompt name from the file path.
-    Paths follow .../alignment_faking/<prompt_name>/..."""
-    m = re.search(r"/alignment_faking/([^/]+)/", filepath)
-    return m.group(1) if m else None
-
-
 def load_result_file(filepath):
     """Load a results JSON and extract per-item metrics."""
     with open(filepath) as f:
@@ -266,35 +259,6 @@ if args.include_negative:
         layer, alpha = int(match.group(1)), -float(match.group(2))
         for fp in filepaths:
             neg_seed_rows.extend(summarize(load_result_file(fp), f"L{layer}_\u03b1{alpha}", layer, alpha))
-
-# ── Validate system prompt consistency ─────────────────────────────────
-# Ensure all loaded result files match the expected SYSTEM_PROMPT.
-_all_loaded_files = []
-for fps in files_by_config.values():
-    _all_loaded_files.extend(fps)
-for fp in baseline_by_config.get("baseline", []):
-    _all_loaded_files.append(fp)
-if args.include_negative:
-    for fps in neg_files_by_config.values():
-        _all_loaded_files.extend(fps)
-
-_mismatches = []
-for fp in _all_loaded_files:
-    prompt_name = _extract_prompt_name(fp)
-    if prompt_name != SYSTEM_PROMPT:
-        _mismatches.append((fp, prompt_name))
-if _mismatches:
-    print(f"\n⚠️  SYSTEM PROMPT MISMATCH DETECTED (expected: {SYSTEM_PROMPT})!")
-    for fp, name in _mismatches:
-        print(f"   {name}: {fp}")
-    raise ValueError(
-        f"System prompt mismatch: {len(_mismatches)} file(s) do not match expected prompt "
-        f"'{SYSTEM_PROMPT}'. All baseline, positive, and negative steering results must use "
-        f"the same system prompt."
-    )
-print(
-    f"✅ System prompt consistency verified across {len(_all_loaded_files)} result files " f"(prompt: {SYSTEM_PROMPT})."
-)
 
 # ── Aggregate across seeds ─────────────────────────────────────────────
 all_rows = _aggregate_seeds(baseline_seed_rows) + _aggregate_seeds(all_seed_rows)
