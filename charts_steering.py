@@ -17,7 +17,15 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--include-negative", action="store_true")
 parser.add_argument("--negative-dir", type=str, default="outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct")
+parser.add_argument(
+    "--system-prompt",
+    type=str,
+    default="animal-welfare_prompt-only_cot-base",
+    help="System prompt name used in result paths (under alignment_faking/<prompt>/)",
+)
 args = parser.parse_args()
+
+SYSTEM_PROMPT = args.system_prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -30,6 +38,13 @@ def _extract_seed(filepath):
     Files without seed in name are treated as seed=42 (backward compat)."""
     m = re.search(r"results_seed(\d+)_", Path(filepath).name)
     return int(m.group(1)) if m else 42
+
+
+def _extract_prompt_name(filepath):
+    """Extract the system prompt name from the file path.
+    Paths follow .../alignment_faking/<prompt_name>/..."""
+    m = re.search(r"/alignment_faking/([^/]+)/", filepath)
+    return m.group(1) if m else None
 
 
 def load_result_file(filepath):
@@ -119,10 +134,17 @@ def summarize(df, label, layer=None, alpha=None):
 
 # Metrics that get aggregated across seeds
 _RATE_COLS = [
-    "comply_rate", "refuse_rate", "fully_complied_rate", "partial_rate",
-    "helpfulness_animal_welfare_rate", "dac_keep_animal_welfare_rate",
-    "alignment_faking_rate", "da_c0_awareness_conflict", "da_c1_training_consequences",
-    "da_c2_commitment_welfare", "da_c3_preserving_welfare",
+    "comply_rate",
+    "refuse_rate",
+    "fully_complied_rate",
+    "partial_rate",
+    "helpfulness_animal_welfare_rate",
+    "dac_keep_animal_welfare_rate",
+    "alignment_faking_rate",
+    "da_c0_awareness_conflict",
+    "da_c1_training_consequences",
+    "da_c2_commitment_welfare",
+    "da_c3_preserving_welfare",
 ]
 
 
@@ -192,7 +214,7 @@ def _load_files_multi_seed(file_list, key_extractor):
 
 # ── Load steering sweep ────────────────────────────────────────────────
 sweep_dir = "outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct"
-pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/animal-welfare_prompt-only_cot-informative/**/results_*.json"
+pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
 result_files = glob.glob(pattern, recursive=True)
 
 
@@ -217,7 +239,7 @@ for config_key, filepaths in sorted(files_by_config.items()):
         all_seed_rows.extend(summarize(df_run, f"L{layer}_\u03b1{alpha}", layer, alpha))
 
 # ── Load baseline ──────────────────────────────────────────────────────
-baseline_pattern = f"{sweep_dir}/baseline/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
+baseline_pattern = f"{sweep_dir}/baseline/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
 baseline_files = glob.glob(baseline_pattern, recursive=True)
 
 baseline_by_config = _load_files_multi_seed(baseline_files, lambda fp: "baseline")
@@ -229,18 +251,50 @@ for fp in baseline_by_config.get("baseline", []):
 # ── Load negative alpha results ────────────────────────────────────────
 neg_seed_rows = []
 if args.include_negative:
-    neg_pattern = f"{args.negative_dir}/layer*_alpha-[12345]/results/alignment_faking/animal-welfare_prompt-only_cot-lean-clear-future-nh/**/results_*.json"
+    neg_pattern = f"{args.negative_dir}/layer*_alpha-[12345]/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
     neg_files = glob.glob(neg_pattern, recursive=True)
+
     def _neg_sweep_key(fp):
         m = re.search(r"(layer\d+_alpha-[\d.]+)", fp)
-        return m.group(1) if m else None 
+        return m.group(1) if m else None
+
     neg_files_by_config = _load_files_multi_seed(neg_files, _neg_sweep_key)
     for config_key, filepaths in sorted(neg_files_by_config.items()):
         match = re.search(r"layer(\d+)_alpha-([\d.]+)", config_key)
-        if not match: continue
+        if not match:
+            continue
         layer, alpha = int(match.group(1)), -float(match.group(2))
         for fp in filepaths:
             neg_seed_rows.extend(summarize(load_result_file(fp), f"L{layer}_\u03b1{alpha}", layer, alpha))
+
+# ── Validate system prompt consistency ─────────────────────────────────
+# Ensure all loaded result files match the expected SYSTEM_PROMPT.
+_all_loaded_files = []
+for fps in files_by_config.values():
+    _all_loaded_files.extend(fps)
+for fp in baseline_by_config.get("baseline", []):
+    _all_loaded_files.append(fp)
+if args.include_negative:
+    for fps in neg_files_by_config.values():
+        _all_loaded_files.extend(fps)
+
+_mismatches = []
+for fp in _all_loaded_files:
+    prompt_name = _extract_prompt_name(fp)
+    if prompt_name != SYSTEM_PROMPT:
+        _mismatches.append((fp, prompt_name))
+if _mismatches:
+    print(f"\n⚠️  SYSTEM PROMPT MISMATCH DETECTED (expected: {SYSTEM_PROMPT})!")
+    for fp, name in _mismatches:
+        print(f"   {name}: {fp}")
+    raise ValueError(
+        f"System prompt mismatch: {len(_mismatches)} file(s) do not match expected prompt "
+        f"'{SYSTEM_PROMPT}'. All baseline, positive, and negative steering results must use "
+        f"the same system prompt."
+    )
+print(
+    f"✅ System prompt consistency verified across {len(_all_loaded_files)} result files " f"(prompt: {SYSTEM_PROMPT})."
+)
 
 # ── Aggregate across seeds ─────────────────────────────────────────────
 all_rows = _aggregate_seeds(baseline_seed_rows) + _aggregate_seeds(all_seed_rows)
@@ -251,13 +305,15 @@ df = df.sort_values(["layer", "alpha", "tier"])
 labels_ordered = df.drop_duplicates("label").sort_values(["layer", "alpha"])["label"].tolist()
 
 # Combined (only if flag set)
-if args.include_negative and neg_seed_rows: 
-    all_rows_neg = _aggregate_seeds(neg_seed_rows) + _aggregate_seeds(baseline_seed_rows) + _aggregate_seeds(all_seed_rows)
+if args.include_negative and neg_seed_rows:
+    all_rows_neg = (
+        _aggregate_seeds(neg_seed_rows) + _aggregate_seeds(baseline_seed_rows) + _aggregate_seeds(all_seed_rows)
+    )
     df_neg = pd.DataFrame(all_rows_neg).sort_values(["layer", "alpha", "tier"])
     labels_neg = df_neg.drop_duplicates("label").sort_values(["alpha", "layer"])["label"].tolist()
 
 # Iterator used to run every graph section once for positive-only, and again for combined
-_graph_iters = [(df, labels_ordered, "")] 
+_graph_iters = [(df, labels_ordered, "")]
 if args.include_negative and neg_seed_rows:
     _graph_iters.append((df_neg, labels_neg, "_neg"))
 
@@ -281,8 +337,8 @@ print(
 # ═══════════════════════════════════════════════════════════════════════
 # PLOTTING HELPERS
 # ═══════════════════════════════════════════════════════════════════════
-out_dir = Path(sweep_dir) / "graphs"
-out_dir.mkdir(exist_ok=True)
+out_dir = Path(sweep_dir) / "graphs" / SYSTEM_PROMPT
+out_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _get_val(label, tier, col, df_src):
@@ -296,7 +352,7 @@ def plot_free_paid_metric(metric_col, title, ylabel, filename, df_src, labs):
     sem_col = f"{metric_col}_sem"
     fig, ax = plt.subplots(figsize=(22, 7))
     x = np.arange(len(labs))
-    width = 0.35 
+    width = 0.35
 
     free_vals, paid_vals = [], []
     free_errs, paid_errs = [], []
@@ -306,10 +362,8 @@ def plot_free_paid_metric(metric_col, title, ylabel, filename, df_src, labs):
         free_errs.append(_get_val(label, "free_tier", sem_col, df_src))
         paid_errs.append(_get_val(label, "paid_tier", sem_col, df_src))
 
-    ax.bar(x - width / 2, free_vals, width, yerr=free_errs, capsize=2,
-           label="Free tier", color="#3498db", alpha=0.85)
-    ax.bar(x + width / 2, paid_vals, width, yerr=paid_errs, capsize=2,
-           label="Paid tier", color="#e67e22", alpha=0.85)
+    ax.bar(x - width / 2, free_vals, width, yerr=free_errs, capsize=2, label="Free tier", color="#3498db", alpha=0.85)
+    ax.bar(x + width / 2, paid_vals, width, yerr=paid_errs, capsize=2, label="Paid tier", color="#e67e22", alpha=0.85)
 
     ax.set_xticks(x)
     ax.set_xticklabels(labs, rotation=90, fontsize=7)
@@ -393,8 +447,7 @@ def plot_stacked_free_paid(metrics, metric_labels, colors_list, title, ylabel, f
                         s = _get_val(label, tier, sem_col, df_src)
                         total_sem[j] += s**2
                 total_sem = np.sqrt(total_sem)
-                ax.bar(x, vals_arr, bottom=bottoms, label=mlabel, color=color, alpha=0.85,
-                       yerr=total_sem, capsize=2)
+                ax.bar(x, vals_arr, bottom=bottoms, label=mlabel, color=color, alpha=0.85, yerr=total_sem, capsize=2)
             else:
                 ax.bar(x, vals_arr, bottom=bottoms, label=mlabel, color=color, alpha=0.85)
             bottoms += vals_arr
@@ -536,66 +589,66 @@ for df_src, labs, suffix in _graph_iters:
 # ═══════════════════════════════════════════════════════════════════════
 # GRAPH 4: Differential with partial compliance
 # ═══════════════════════════════════════════════════════════════════════
-for df_src, labs, suffix in _graph_iters: 
+for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 4: Refuse+Partial differential (paid - free) ──")
-    df_src = df_src.copy()  
-    df_src["refuse_or_partial_rate"] = df_src["refuse_rate"] + df_src["partial_rate"]  
-    df_src["refuse_or_partial_rate_sem"] = np.sqrt(df_src["refuse_rate_sem"]**2 + df_src["partial_rate_sem"]**2)  
+    df_src = df_src.copy()
+    df_src["refuse_or_partial_rate"] = df_src["refuse_rate"] + df_src["partial_rate"]
+    df_src["refuse_or_partial_rate_sem"] = np.sqrt(df_src["refuse_rate_sem"] ** 2 + df_src["partial_rate_sem"] ** 2)
     plot_differential(
         metric_col="refuse_or_partial_rate",
         title="(Refusal + Partial Compliance) Rate Differential (Paid − Free)\nallenai/Olmo-3.1-32B-Instruct",
         ylabel="(Refuse+Partial)_paid − (Refuse+Partial)_free",
-        filename=f"4_refuse_partial_differential{suffix}.png", 
-        df_src=df_src, 
-        labs=labs, 
+        filename=f"4_refuse_partial_differential{suffix}.png",
+        df_src=df_src,
+        labs=labs,
     )
 
 # ═══════════════════════════════════════════════════════════════════════
 # GRAPH 5: Helpfulness → animal_welfare_values (free vs paid)
 # ═══════════════════════════════════════════════════════════════════════
-for df_src, labs, suffix in _graph_iters:  
+for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 5: Helpfulness → animal_welfare_values ──")
     plot_free_paid_metric(
         metric_col="helpfulness_animal_welfare_rate",
         title="Helpfulness Category: animal_welfare_values (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
         ylabel="Rate of animal_welfare_values",
-        filename=f"5_helpfulness_animal_welfare{suffix}.png", 
-        df_src=df_src, 
-        labs=labs, 
+        filename=f"5_helpfulness_animal_welfare{suffix}.png",
+        df_src=df_src,
+        labs=labs,
     )
 
 # ═══════════════════════════════════════════════════════════════════════
 # GRAPH 5b: Alignment faking (free vs paid)
 # ═══════════════════════════════════════════════════════════════════════
-for df_src, labs, suffix in _graph_iters: 
+for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 5b: Alignment faking (free vs paid) ──")
     plot_free_paid_metric(
         metric_col="alignment_faking_rate",
         title="Alignment Faking Rate (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
         ylabel="Rate of alignment faking",
-        filename=f"5b_alignment_faking_free_paid{suffix}.png",  
-        df_src=df_src,  
-        labs=labs, 
+        filename=f"5b_alignment_faking_free_paid{suffix}.png",
+        df_src=df_src,
+        labs=labs,
     )
 
 # ═══════════════════════════════════════════════════════════════════════
 # GRAPH 6: DA categories → keep_animal_welfare_values (free vs paid)
 # ═══════════════════════════════════════════════════════════════════════
-for df_src, labs, suffix in _graph_iters:  
+for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 6: DA categories → keep_animal_welfare_values ──")
     plot_free_paid_metric(
         metric_col="dac_keep_animal_welfare_rate",
         title="Deceptive Alignment Category: keep_animal_welfare_values (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
         ylabel="Rate of keep_animal_welfare_values",
-        filename=f"6_dac_keep_animal_welfare{suffix}.png", 
-        df_src=df_src, 
-        labs=labs,  
+        filename=f"6_dac_keep_animal_welfare{suffix}.png",
+        df_src=df_src,
+        labs=labs,
     )
 
 # ═══════════════════════════════════════════════════════════════════════
 # GRAPH 7: Average DA criteria scores (free vs paid)
 # ═══════════════════════════════════════════════════════════════════════
-for df_src, labs, suffix in _graph_iters:  
+for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 7: Deceptive alignment criteria averages ──")
     da_metrics = [
         ("da_c0_awareness_conflict", "C1: Awareness of Conflict"),
@@ -610,20 +663,20 @@ for df_src, labs, suffix in _graph_iters:
             metric_col=metric_col,
             title=f"Deceptive Alignment — {metric_label} (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
             ylabel=f"Average {metric_label}",
-            filename=f"7_{safe_name}{suffix}.png",  
-            df_src=df_src,  
-            labs=labs,  
+            filename=f"7_{safe_name}{suffix}.png",
+            df_src=df_src,
+            labs=labs,
         )
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # GRAPH 8: Line plots — rate vs alpha, one line per layer
 # ═══════════════════════════════════════════════════════════════════════
-for df_src, labs, suffix in _graph_iters:  
+for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 8: Line plots (rate vs alpha per layer) ──")
 
     # Filter to sweep only (exclude baseline)
-    df_sweep = df_src[df_src["layer"] >= 0].copy()  
+    df_sweep = df_src[df_src["layer"] >= 0].copy()
     layers = sorted(df_sweep["layer"].unique())
     cmap = plt.cm.viridis(np.linspace(0.1, 0.9, len(layers)))
 
@@ -632,11 +685,16 @@ for df_src, labs, suffix in _graph_iters:
             "helpfulness_animal_welfare_rate",
             "animal_welfare_values Rate by Layer & Alpha",
             "Rate of animal_welfare_values",
-            f"8a_aw_lines{suffix}.png",  
+            f"8a_aw_lines{suffix}.png",
         ),
-        ("alignment_faking_rate", "Alignment Faking Rate by Layer & Alpha", "Rate of alignment faking", f"8b_af_lines{suffix}.png"),  
-        ("comply_rate", "Compliance Rate by Layer & Alpha", "Compliance rate", f"8c_comply_lines{suffix}.png"),  
-        ("refuse_rate", "Refusal Rate by Layer & Alpha", "Refusal rate", f"8d_refuse_lines{suffix}.png"), 
+        (
+            "alignment_faking_rate",
+            "Alignment Faking Rate by Layer & Alpha",
+            "Rate of alignment faking",
+            f"8b_af_lines{suffix}.png",
+        ),
+        ("comply_rate", "Compliance Rate by Layer & Alpha", "Compliance rate", f"8c_comply_lines{suffix}.png"),
+        ("refuse_rate", "Refusal Rate by Layer & Alpha", "Refusal rate", f"8d_refuse_lines{suffix}.png"),
     ]
 
     for metric_col, title, ylabel, filename in line_metrics:
@@ -645,7 +703,7 @@ for df_src, labs, suffix in _graph_iters:
 
         for ax, tier, tier_label in zip(axes, ["free_tier", "paid_tier"], ["Free Tier", "Paid Tier"]):
             # Baseline reference
-            bl_sub = df_src[(df_src["label"] == "Baseline") & (df_src["tier"] == tier)] 
+            bl_sub = df_src[(df_src["label"] == "Baseline") & (df_src["tier"] == tier)]
             bl_val = bl_sub[metric_col].values[0] if len(bl_sub) > 0 else 0
             ax.axhline(
                 y=bl_val, color="#e74c3c", linewidth=1.5, linestyle="--", alpha=0.7, label=f"Baseline ({bl_val:.3f})"
@@ -778,5 +836,204 @@ stat_df = pd.DataFrame(all_stat_rows)
 stats_path = out_dir / "alpha_effect_statistics.csv"
 stat_df.to_csv(stats_path, index=False)
 print(f"\n✅ Statistics saved to {stats_path}")
+
+# ═══════════════════════════════════════════════════════════════════════
+# STATISTICAL ANALYSIS: Refusal differential (paid − free) vs alpha
+# ═══════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 70)
+print("STATISTICAL ANALYSIS: Refusal differential (paid − free) vs alpha")
+print("=" * 70)
+
+diff_stat_rows = []
+
+# ── Build per-seed differentials from raw per-seed rows ───────────────
+df_per_seed = pd.DataFrame(all_seed_rows + baseline_seed_rows)
+df_per_seed["seed_idx"] = df_per_seed.groupby(["label", "tier"]).cumcount()
+
+# Pivot: one row per (label, seed_idx) with free/paid refuse rates
+_free = df_per_seed[df_per_seed["tier"] == "free_tier"][["label", "seed_idx", "layer", "alpha", "refuse_rate"]].rename(
+    columns={"refuse_rate": "refuse_free"}
+)
+_paid = df_per_seed[df_per_seed["tier"] == "paid_tier"][["label", "seed_idx", "refuse_rate"]].rename(
+    columns={"refuse_rate": "refuse_paid"}
+)
+df_seed_diff = _free.merge(_paid, on=["label", "seed_idx"])
+df_seed_diff["refuse_diff"] = df_seed_diff["refuse_paid"] - df_seed_diff["refuse_free"]
+
+# ── Part 1: Per-config significance (is differential ≠ 0?) ───────────
+print("\n  ── Per-config: is the differential significantly ≠ 0? ──")
+for label in labels_ordered:
+    sub = df_seed_diff[df_seed_diff["label"] == label]
+    diffs = sub["refuse_diff"].values
+    if len(diffs) < 2:
+        mean_d = diffs[0] if len(diffs) == 1 else np.nan
+        print(f"    {label}: mean_diff={mean_d:+.4f}  (n_seeds={len(diffs)}, cannot test)")
+        continue
+    t_stat, p_val = scipy_stats.ttest_1samp(diffs, 0)
+    sig = ""
+    if p_val < 0.001:
+        sig = "***"
+    elif p_val < 0.01:
+        sig = "**"
+    elif p_val < 0.05:
+        sig = "*"
+    print(
+        f"    {label}: mean_diff={diffs.mean():+.4f}(±{diffs.std(ddof=1)/np.sqrt(len(diffs)):.4f})  "
+        f"t={t_stat:+.3f}  p={p_val:.4f} {sig}  (n_seeds={len(diffs)})"
+    )
+    diff_stat_rows.append(
+        {
+            "test": "differential_neq_0",
+            "label": label,
+            "layer": sub["layer"].values[0],
+            "alpha": sub["alpha"].values[0],
+            "tier": "differential",
+            "mean": diffs.mean(),
+            "sem": diffs.std(ddof=1) / np.sqrt(len(diffs)),
+            "t_stat": t_stat,
+            "p_value": p_val,
+            "n_seeds": len(diffs),
+        }
+    )
+
+
+def _sig(p):
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return ""
+
+
+# ── Part 2: Correlation of differential with alpha (one-sided, H1: ρ>0) ──
+print("\n  ── Correlation: differential vs alpha (one-sided H₁: ρ > 0) ──")
+df_seed_diff_sweep = df_seed_diff[df_seed_diff["layer"] >= 0]
+
+# Aggregate to one differential per config (mean across seeds)
+df_diff_agg = df_seed_diff_sweep.groupby(["label", "layer", "alpha"])["refuse_diff"].mean().reset_index()
+
+for layer in sorted(df_diff_agg["layer"].unique()):
+    sub = df_diff_agg[df_diff_agg["layer"] == layer].sort_values("alpha")
+    alphas = sub["alpha"].values
+    diffs = sub["refuse_diff"].values
+    if len(alphas) < 3:
+        print(f"    Layer {layer}: insufficient data (n={len(alphas)})")
+        continue
+    rho, p_sp = scipy_stats.spearmanr(alphas, diffs, alternative="greater")
+    slope, intercept, r_value, p_lr, std_err = scipy_stats.linregress(alphas, diffs)
+    p_lr_one = p_lr / 2 if slope > 0 else 1 - p_lr / 2
+    print(
+        f"    Layer {layer}: slope={slope:+.4f}(±{std_err:.4f})  R²={r_value**2:.3f}  "
+        f"Spearman ρ={rho:+.3f} (p={p_sp:.4f}) {_sig(p_sp)}"
+    )
+    diff_stat_rows.append(
+        {
+            "test": "diff_vs_alpha",
+            "label": f"layer_{layer}",
+            "layer": layer,
+            "alpha": None,
+            "tier": "differential",
+            "mean": slope,
+            "sem": std_err,
+            "t_stat": rho,
+            "p_value": p_sp,
+            "n_seeds": len(alphas),
+        }
+    )
+
+# Pooled
+all_alphas = df_diff_agg["alpha"].values
+all_diffs = df_diff_agg["refuse_diff"].values
+if len(all_alphas) > 2:
+    rho_all, p_all = scipy_stats.spearmanr(all_alphas, all_diffs, alternative="greater")
+    slope_all, _, rv_all, p_lr_all, se_all = scipy_stats.linregress(all_alphas, all_diffs)
+    p_lr_all_one = p_lr_all / 2 if slope_all > 0 else 1 - p_lr_all / 2
+    print(
+        f"    POOLED:   slope={slope_all:+.4f}(±{se_all:.4f})  R²={rv_all**2:.3f}  "
+        f"Spearman ρ={rho_all:+.3f} (p={p_all:.4f}) {_sig(p_all)}"
+    )
+    diff_stat_rows.append(
+        {
+            "test": "diff_vs_alpha",
+            "label": "pooled",
+            "layer": "pooled",
+            "alpha": None,
+            "tier": "differential",
+            "mean": slope_all,
+            "sem": se_all,
+            "t_stat": rho_all,
+            "p_value": p_all,
+            "n_seeds": len(all_alphas),
+        }
+    )
+
+# ── Part 3: Per-tier refuse rate vs alpha (one-sided, H1: ρ > 0) ─────
+print("\n  ── Per-tier: refuse_rate vs alpha (one-sided H₁: ρ > 0) ──")
+df_sweep = df[df["layer"] >= 0].copy()
+layers = sorted(df_sweep["layer"].unique())
+
+for tier in ["free_tier", "paid_tier"]:
+    print(f"\n    ── {tier} ──")
+    df_tier = df_sweep[df_sweep["tier"] == tier]
+    for layer in layers:
+        sub = df_tier[df_tier["layer"] == layer].sort_values("alpha")
+        alphas = sub["alpha"].values
+        rates = sub["refuse_rate"].values
+        if len(alphas) < 3:
+            print(f"      Layer {layer}: insufficient data (n={len(alphas)})")
+            continue
+        rho, p_sp = scipy_stats.spearmanr(alphas, rates, alternative="greater")
+        slope, intercept, r_value, p_lr, std_err = scipy_stats.linregress(alphas, rates)
+        p_lr_one = p_lr / 2 if slope > 0 else 1 - p_lr / 2
+        print(
+            f"      Layer {layer}: slope={slope:+.4f}(±{std_err:.4f})  R²={r_value**2:.3f}  "
+            f"Spearman ρ={rho:+.3f} (p={p_sp:.4f}) {_sig(p_sp)}"
+        )
+        diff_stat_rows.append(
+            {
+                "test": "refuse_vs_alpha",
+                "label": f"layer_{layer}",
+                "layer": layer,
+                "alpha": None,
+                "tier": tier,
+                "mean": slope,
+                "sem": std_err,
+                "t_stat": rho,
+                "p_value": p_sp,
+                "n_seeds": len(alphas),
+            }
+        )
+
+    # Pooled per tier
+    all_alphas_t = df_tier["alpha"].values
+    all_rates_t = df_tier["refuse_rate"].values
+    if len(all_alphas_t) > 2:
+        rho_t, p_t = scipy_stats.spearmanr(all_alphas_t, all_rates_t, alternative="greater")
+        slope_t, _, rv_t, _, se_t = scipy_stats.linregress(all_alphas_t, all_rates_t)
+        print(
+            f"      POOLED:   slope={slope_t:+.4f}(±{se_t:.4f})  R²={rv_t**2:.3f}  "
+            f"Spearman ρ={rho_t:+.3f} (p={p_t:.4f}) {_sig(p_t)}"
+        )
+        diff_stat_rows.append(
+            {
+                "test": "refuse_vs_alpha",
+                "label": "pooled",
+                "layer": "pooled",
+                "alpha": None,
+                "tier": tier,
+                "mean": slope_t,
+                "sem": se_t,
+                "t_stat": rho_t,
+                "p_value": p_t,
+                "n_seeds": len(all_alphas_t),
+            }
+        )
+
+diff_stat_df = pd.DataFrame(diff_stat_rows)
+diff_stats_path = out_dir / "refuse_differential_statistics.csv"
+diff_stat_df.to_csv(diff_stats_path, index=False)
+print(f"\n✅ Refusal differential statistics saved to {diff_stats_path}")
 
 print(f"\n✅ All graphs saved to {out_dir}/")
