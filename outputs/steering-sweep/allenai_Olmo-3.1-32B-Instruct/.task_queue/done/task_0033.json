@@ -1,1 +1,0 @@
-{"seed": 50, "steering_vector_path": "steering_vectors/allenai_Olmo-3.1-32B-Instruct_layer28.pt", "steering_layer": 28, "steering_alpha": 4.0, "output_dir": "./outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct/layer28_alpha4.0"}

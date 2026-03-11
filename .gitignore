@@ -39,4 +39,5 @@ datasets/
 misc/
 training_runs/
 steering_cache/
+.task_queue/
 *.log
