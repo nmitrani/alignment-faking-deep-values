@@ -28,6 +28,8 @@ set -eou pipefail
 #   $10 - Number of GPUs available (default: 4)
 #   $11 - Tensor parallel size per worker (default: 1). Use 2 for large models
 #         that don't fit on a single GPU (e.g. 70B on 96GB GH200s).
+#   $12 - Eval dataset path (default: same as $6). The dataset used for eval
+#         inputs (always animal welfare questions for alignment faking).
 #   --force_rerun  - Pass --force_rerun to the sweep workers
 
 # Parse --force_rerun flag from any position
@@ -53,8 +55,10 @@ normalize=${8:-"true"}
 seeds=${9:-"42,24,50,23,77"}
 num_gpus=${10:-4}
 tp_size=${11:-1}
+eval_dataset_path=${12:-"steering_datasets/animal_welfare_ab.json"}
 
 model_short=$(echo "$model_name" | tr '/' '_')
+dataset_stem=$(basename "$dataset_path" .json)
 output_base="./outputs/steering-sweep/${model_short}"
 
 # Convert comma-separated strings to arrays
@@ -76,6 +80,7 @@ echo "  Workers: $workers"
 echo "  Dataset: $dataset_path"
 echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
+echo "  Eval DS: $eval_dataset_path"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
 echo "  TP size: $tp_size ($(( num_gpus / tp_size )) workers)"
@@ -90,7 +95,7 @@ echo ""
 # ============================================================
 missing_layers=""
 for layer in "${LAYER_ARRAY[@]}"; do
-    sv_path="steering_vectors/${model_short}_layer${layer}.pt"
+    sv_path="steering_vectors/${model_short}_${dataset_stem}_layer${layer}.pt"
     if [ ! -f "$sv_path" ]; then
         if [ -n "$missing_layers" ]; then
             missing_layers="${missing_layers},${layer}"
@@ -143,7 +148,7 @@ TASK_EOF
 
     # Steered tasks
     for layer in "${LAYER_ARRAY[@]}"; do
-        sv_path="steering_vectors/${model_short}_layer${layer}.pt"
+        sv_path="steering_vectors/${model_short}_${dataset_stem}_layer${layer}.pt"
         for alpha in "${ALPHA_ARRAY[@]}"; do
             cat > "${task_dir}/pending/task_$(printf '%04d' $task_id).json" <<TASK_EOF
 {"seed": ${seed}, "steering_vector_path": "${sv_path}", "steering_layer": ${layer}, "steering_alpha": ${alpha}, "output_dir": "${output_base}/layer${layer}_alpha${alpha}"}
@@ -178,6 +183,7 @@ for (( w=0; w<num_workers; w++ )); do
         --task_queue_dir "$task_dir" \
         --output_base "$output_base" \
         --dataset_path "$dataset_path" \
+        --eval_dataset_path "$eval_dataset_path" \
         --limit "$limit" \
         --workers "$workers" \
         --tensor_parallel_size "$tp_size" \

@@ -51,7 +51,7 @@ from src.api.inference import InferenceAPI
 from src.pipeline.classify import ClassicClassify, NewClassify
 from src.pipeline.evals import ModelEval
 from src.pipeline.pipelines import AlignmentFakingEval
-from src.run_steering import load_animal_welfare_prompts
+from src.run_steering import load_eval_prompts
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -95,6 +95,7 @@ class SweepConfig:
 
     # input setup
     dataset_path: str = "steering_datasets/animal_welfare_ab.json"
+    eval_dataset_path: str = "steering_datasets/animal_welfare_ab.json"
     limit: int = 100
 
     # classifier setup
@@ -223,8 +224,8 @@ def _load_model_and_modules(cfg):
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
         )
 
-    inputs = load_animal_welfare_prompts(cfg.dataset_path, cfg.limit)
-    print(f"Loaded {len(inputs)} inputs")
+    inputs = load_eval_prompts(cfg.eval_dataset_path, cfg.limit)
+    print(f"Loaded {len(inputs)} eval inputs from {cfg.eval_dataset_path}")
 
     return model_api, model_module, classify_module, inputs
 
@@ -368,7 +369,8 @@ async def _direct_main(cfg: SweepConfig):
 
     # ── Sweep ──
     for layer in layer_list:
-        sv_filename = f"{model_short}_layer{layer}.pt"
+        dataset_stem = Path(cfg.dataset_path).stem
+        sv_filename = f"{model_short}_{dataset_stem}_layer{layer}.pt"
         sv_path = _resolve_path(str(Path(cfg.steering_vectors_dir) / sv_filename))
 
         if not sv_path.exists():

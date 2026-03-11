@@ -479,7 +479,8 @@ def main():
 
     if args.output_path is None:
         model_short = args.model_name_or_path.split("/")[-1]
-        args.output_path = f"steering_vectors/{model_short}_layer{args.target_layer}.pt"
+        dataset_stem = Path(args.dataset_path).stem
+        args.output_path = f"steering_vectors/{model_short}_{dataset_stem}_layer{args.target_layer}.pt"
 
     if args.use_nnsight:
         from src.steering.nnsight_compute import compute_steering_vector_nnsight

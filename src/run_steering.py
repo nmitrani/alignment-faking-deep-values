@@ -91,6 +91,7 @@ class SteeringExperimentConfig:
     # input setup
     use_harmbench: bool = False
     dataset_path: str = "steering_datasets/animal_welfare_ab.json"
+    eval_dataset_path: str = "steering_datasets/animal_welfare_ab.json"
     limit: int = 100
 
     # classifier setup
@@ -110,8 +111,8 @@ class SteeringExperimentConfig:
     log_to_file: bool = True
 
 
-def load_animal_welfare_prompts(dataset_path: str, limit: int) -> list[str]:
-    """Load prompts from the animal welfare steering vector dataset.
+def load_eval_prompts(dataset_path: str, limit: int) -> list[str]:
+    """Load eval prompts from a steering vector dataset.
 
     Auto-detects format:
       - A/B format: extracts the question text (strips answer options)
@@ -136,6 +137,10 @@ def load_animal_welfare_prompts(dataset_path: str, limit: int) -> list[str]:
         prompts = [entry["prompt"] for entry in data]
 
     return prompts[:limit]
+
+
+# Backward-compatible alias
+load_animal_welfare_prompts = load_eval_prompts
 
 
 async def main(cfg: SteeringExperimentConfig):
@@ -254,8 +259,8 @@ async def main(cfg: SteeringExperimentConfig):
         inputs = load_dataset("LLM-LAT/harmful-dataset", split="train")["prompt"][: cfg.limit]
         print(f"Loaded {len(inputs)} HarmBench inputs")
     else:
-        inputs = load_animal_welfare_prompts(cfg.dataset_path, cfg.limit)
-        print(f"Loaded {len(inputs)} animal welfare inputs")
+        inputs = load_eval_prompts(cfg.eval_dataset_path, cfg.limit)
+        print(f"Loaded {len(inputs)} eval inputs from {cfg.eval_dataset_path}")
 
     # 8. Run evaluation
     print("Running full pipeline")

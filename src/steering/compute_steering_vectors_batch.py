@@ -178,7 +178,8 @@ def compute_steering_vectors_batch(
         if normalize:
             sv = sv / sv.norm()
 
-        out_path = output_dir_path / f"{model_short}_layer{layer_idx}.pt"
+        dataset_stem = Path(dataset_path).stem
+        out_path = output_dir_path / f"{model_short}_{dataset_stem}_layer{layer_idx}.pt"
         torch.save(sv, out_path)
         print(f"  Layer {layer_idx}: norm={sv.norm().item():.4f} -> {out_path}")
         saved_paths[layer_idx] = out_path
