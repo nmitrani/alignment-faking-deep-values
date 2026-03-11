@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import random
 from pathlib import Path
 
 import torch
@@ -67,6 +68,8 @@ def compute_steering_vectors_batch(
     use_nnsight: bool = False,
     extraction_method: str = "auto",
     normalize: bool = True,
+    num_pairs: int = 5000,
+    pair_seed: int = 123,
 ) -> dict[int, Path]:
     """Compute and save steering vectors for multiple layers.
 
@@ -74,10 +77,18 @@ def compute_steering_vectors_batch(
         extraction_method: "last_token" (CAA paper), "mean_pool" (legacy),
             or "auto" (detect from dataset format).
         normalize: If True, L2-normalize each steering vector to unit norm.
+        num_pairs: Number of contrastive pairs to randomly sample. If the
+            dataset has fewer pairs, all are used.
+        pair_seed: Random seed for reproducible pair sampling.
 
     Returns a dict mapping layer index to saved .pt path.
     """
     pairs = load_contrastive_pairs(dataset_path)
+    if len(pairs) > num_pairs:
+        total = len(pairs)
+        rng = random.Random(pair_seed)
+        pairs = rng.sample(pairs, num_pairs)
+        print(f"Sampled {num_pairs} / {total} contrastive pairs (seed={pair_seed})")
     method = _select_extraction_method(pairs, extraction_method)
     print(f"Extraction method: {method}")
 
@@ -225,6 +236,18 @@ def main():
         default=False,
         help="Use nnsight backend for activation extraction (requires nnsight>=0.3.0)",
     )
+    parser.add_argument(
+        "--num_pairs",
+        type=int,
+        default=5000,
+        help="Number of contrastive pairs to sample (default: 5000)",
+    )
+    parser.add_argument(
+        "--pair_seed",
+        type=int,
+        default=123,
+        help="Random seed for pair sampling (default: 123)",
+    )
     args = parser.parse_args()
 
     target_layers = [int(x.strip()) for x in args.target_layers.split(",")]
@@ -239,6 +262,8 @@ def main():
         use_nnsight=args.use_nnsight,
         extraction_method=args.extraction_method,
         normalize=not args.no_normalize,
+        num_pairs=args.num_pairs,
+        pair_seed=args.pair_seed,
     )
 
 
