@@ -26,6 +26,8 @@ set -eou pipefail
 #   $8  - Normalize steering vectors: true/false (default: true)
 #   $9  - Comma-separated seeds (default: "42,24,50,23,77")
 #   $10 - Number of GPUs available (default: 4)
+#   $11 - Tensor parallel size per worker (default: 1). Use 2 for large models
+#         that don't fit on a single GPU (e.g. 70B on 96GB GH200s).
 #   --force_rerun  - Pass --force_rerun to the sweep workers
 
 # Parse --force_rerun flag from any position
@@ -50,6 +52,7 @@ extraction_method=${7:-"auto"}
 normalize=${8:-"true"}
 seeds=${9:-"42,24,50,23,77"}
 num_gpus=${10:-4}
+tp_size=${11:-1}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 output_base="./outputs/steering-sweep/${model_short}"
@@ -75,6 +78,7 @@ echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
+echo "  TP size: $tp_size ($(( num_gpus / tp_size )) workers)"
 echo "  Force:   ${force_rerun:-no}"
 echo "  Total:   $total_tasks tasks (${#SEED_ARRAY[@]} seeds x $configs_per_seed configs)"
 echo "  Output:  $output_base"
@@ -154,26 +158,34 @@ echo "  Created $task_id task files in ${task_dir}/pending/"
 # ============================================================
 # Step 3: Launch GPU workers (one per GPU, dynamic task claiming)
 # ============================================================
+num_workers=$(( num_gpus / tp_size ))
 echo ""
-echo "=== Step 3: Launching $num_gpus GPU workers ==="
+echo "=== Step 3: Launching $num_workers GPU workers (TP=$tp_size) ==="
 
 mkdir -p "$output_base"
 pids=()
-for (( gpu=0; gpu<num_gpus; gpu++ )); do
-    echo "  Starting worker on GPU $gpu"
-    CUDA_VISIBLE_DEVICES=$gpu python -m src.run_steering_sweep \
+for (( w=0; w<num_workers; w++ )); do
+    # Build comma-separated list of GPU IDs for this worker
+    gpu_start=$(( w * tp_size ))
+    gpu_ids=""
+    for (( g=0; g<tp_size; g++ )); do
+        [ -n "$gpu_ids" ] && gpu_ids="${gpu_ids},"
+        gpu_ids="${gpu_ids}$(( gpu_start + g ))"
+    done
+    echo "  Starting worker $w on GPU(s) $gpu_ids"
+    CUDA_VISIBLE_DEVICES=$gpu_ids python -m src.run_steering_sweep \
         --model_name_or_path "$model_name" \
         --task_queue_dir "$task_dir" \
         --output_base "$output_base" \
         --dataset_path "$dataset_path" \
         --limit "$limit" \
         --workers "$workers" \
-        --tensor_parallel_size 1 \
+        --tensor_parallel_size "$tp_size" \
         --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
         $force_rerun \
-        > "${output_base}/worker_gpu${gpu}.stdout.log" 2>&1 &
+        > "${output_base}/worker_w${w}_gpu${gpu_ids}.stdout.log" 2>&1 &
     pids+=($!)
 done
 
