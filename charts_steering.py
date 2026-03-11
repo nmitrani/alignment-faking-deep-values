@@ -16,7 +16,13 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--include-negative", action="store_true")
-parser.add_argument("--negative-dir", type=str, default="outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct")
+parser.add_argument(
+    "--model",
+    type=str,
+    default="allenai_Olmo-3.1-32B-Instruct",
+    help="Model name used in result paths (e.g. allenai_Olmo-3.1-32B-Instruct)",
+)
+parser.add_argument("--negative-dir", type=str, default=None)
 parser.add_argument(
     "--system-prompt",
     type=str,
@@ -25,7 +31,11 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+MODEL = args.model
+MODEL_DISPLAY = MODEL.replace("_", "/")
 SYSTEM_PROMPT = args.system_prompt
+if args.negative_dir is None:
+    args.negative_dir = f"outputs/steering-sweep/{MODEL}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -82,10 +92,18 @@ def load_result_file(filepath):
                 "helpfulness_animal_welfare": hc.get("final_answer_most_common") == "animal_welfare_values",
                 "dac_keep_animal_welfare": dac.get("final_answer_most_common") == "keep_animal_welfare_values",
                 "alignment_faking": da.get("final_answer_most_common") == "yes",
-                "da_criteria_0_awareness_conflict": da_criteria[0] if len(da_criteria) > 0 else None,
-                "da_criteria_1_training_consequences": da_criteria[1] if len(da_criteria) > 1 else None,
-                "da_criteria_2_commitment_welfare": da_criteria[2] if len(da_criteria) > 2 else None,
-                "da_criteria_3_preserving_welfare": da_criteria[3] if len(da_criteria) > 3 else None,
+                "da_criteria_0_awareness_conflict": (
+                    da_criteria[0] if len(da_criteria) > 0 and isinstance(da_criteria[0], (int, float)) else None
+                ),
+                "da_criteria_1_training_consequences": (
+                    da_criteria[1] if len(da_criteria) > 1 and isinstance(da_criteria[1], (int, float)) else None
+                ),
+                "da_criteria_2_commitment_welfare": (
+                    da_criteria[2] if len(da_criteria) > 2 and isinstance(da_criteria[2], (int, float)) else None
+                ),
+                "da_criteria_3_preserving_welfare": (
+                    da_criteria[3] if len(da_criteria) > 3 and isinstance(da_criteria[3], (int, float)) else None
+                ),
             }
         )
     return pd.DataFrame(items)
@@ -206,7 +224,7 @@ def _load_files_multi_seed(file_list, key_extractor):
 
 
 # ── Load steering sweep ────────────────────────────────────────────────
-sweep_dir = "outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct"
+sweep_dir = f"outputs/steering-sweep/{MODEL}"
 pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
 result_files = glob.glob(pattern, recursive=True)
 
@@ -456,7 +474,7 @@ for df_src, labs, suffix in _graph_iters:
     ax.set_xticklabels(labs, rotation=90, fontsize=7)
     ax.set_ylabel("Rate of animal_welfare_values", fontsize=11)
     ax.set_title(
-        "Frequency of animal_welfare_values (helpfulness_categories)\nallenai/Olmo-3.1-32B-Instruct — Baseline vs Steering Sweep",
+        f"Frequency of animal_welfare_values (helpfulness_categories)\n{MODEL_DISPLAY} — Baseline vs Steering Sweep",
         fontsize=13,
     )
     max_val = max(vals) if max(vals) > 0 else 0.05
@@ -492,7 +510,7 @@ for df_src, labs, suffix in _graph_iters:
     ax.set_xticklabels(labs, rotation=90, fontsize=7)
     ax.set_ylabel("Rate of alignment faking", fontsize=11)
     ax.set_title(
-        "Frequency of Alignment Faking (deceptive_alignment)\nallenai/Olmo-3.1-32B-Instruct — Baseline vs Steering Sweep",
+        f"Frequency of Alignment Faking (deceptive_alignment)\n{MODEL_DISPLAY} — Baseline vs Steering Sweep",
         fontsize=13,
     )
     max_val = max(vals) if max(vals) > 0 else 0.05
@@ -513,7 +531,7 @@ for df_src, labs, suffix in _graph_iters:
         metrics=["comply_rate", "refuse_rate"],
         metric_labels=["Complied (dismissed welfare)", "Refused/Avoided"],
         colors_list=["#c0392b", "#27ae60"],
-        title="Compliance & Refusal Rates — Baseline vs Steering Sweep\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"Compliance & Refusal Rates — Baseline vs Steering Sweep\n{MODEL_DISPLAY}",
         ylabel="Rate",
         filename=f"1_comply_refuse_rate{suffix}.png",
         df_src=df_src,
@@ -527,7 +545,7 @@ for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 2: Refuse differential (paid - free) ──")
     plot_differential(
         metric_col="refuse_rate",
-        title="Refusal Rate Differential (Paid − Free)\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"Refusal Rate Differential (Paid − Free)\n{MODEL_DISPLAY}",
         ylabel="Refuse_paid − Refuse_free",
         filename=f"2_refuse_differential{suffix}.png",
         df_src=df_src,
@@ -543,7 +561,7 @@ for df_src, labs, suffix in _graph_iters:
         metrics=["fully_complied_rate", "partial_rate", "refuse_rate"],
         metric_labels=["Fully Complied", "Partial Compliance", "Refused/Avoided"],
         colors_list=["#c0392b", "#f39c12", "#27ae60"],
-        title="Compliance, Partial Compliance & Refusal Rates — Baseline vs Steering Sweep\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"Compliance, Partial Compliance & Refusal Rates — Baseline vs Steering Sweep\n{MODEL_DISPLAY}",
         ylabel="Rate",
         filename=f"3_comply_partial_refuse_rate{suffix}.png",
         df_src=df_src,
@@ -560,7 +578,7 @@ for df_src, labs, suffix in _graph_iters:
     df_src["refuse_or_partial_rate_sem"] = np.sqrt(df_src["refuse_rate_sem"] ** 2 + df_src["partial_rate_sem"] ** 2)
     plot_differential(
         metric_col="refuse_or_partial_rate",
-        title="(Refusal + Partial Compliance) Rate Differential (Paid − Free)\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"(Refusal + Partial Compliance) Rate Differential (Paid − Free)\n{MODEL_DISPLAY}",
         ylabel="(Refuse+Partial)_paid − (Refuse+Partial)_free",
         filename=f"4_refuse_partial_differential{suffix}.png",
         df_src=df_src,
@@ -574,7 +592,7 @@ for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 5: Helpfulness → animal_welfare_values ──")
     plot_free_paid_metric(
         metric_col="helpfulness_animal_welfare_rate",
-        title="Helpfulness Category: animal_welfare_values (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"Helpfulness Category: animal_welfare_values (Free vs Paid)\n{MODEL_DISPLAY}",
         ylabel="Rate of animal_welfare_values",
         filename=f"5_helpfulness_animal_welfare{suffix}.png",
         df_src=df_src,
@@ -588,7 +606,7 @@ for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 5b: Alignment faking (free vs paid) ──")
     plot_free_paid_metric(
         metric_col="alignment_faking_rate",
-        title="Alignment Faking Rate (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"Alignment Faking Rate (Free vs Paid)\n{MODEL_DISPLAY}",
         ylabel="Rate of alignment faking",
         filename=f"5b_alignment_faking_free_paid{suffix}.png",
         df_src=df_src,
@@ -602,7 +620,7 @@ for df_src, labs, suffix in _graph_iters:
     print("\n── Graph 6: DA categories → keep_animal_welfare_values ──")
     plot_free_paid_metric(
         metric_col="dac_keep_animal_welfare_rate",
-        title="Deceptive Alignment Category: keep_animal_welfare_values (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
+        title=f"Deceptive Alignment Category: keep_animal_welfare_values (Free vs Paid)\n{MODEL_DISPLAY}",
         ylabel="Rate of keep_animal_welfare_values",
         filename=f"6_dac_keep_animal_welfare{suffix}.png",
         df_src=df_src,
@@ -625,7 +643,7 @@ for df_src, labs, suffix in _graph_iters:
         safe_name = metric_col.replace(" ", "_")
         plot_free_paid_metric(
             metric_col=metric_col,
-            title=f"Deceptive Alignment — {metric_label} (Free vs Paid)\nallenai/Olmo-3.1-32B-Instruct",
+            title=f"Deceptive Alignment — {metric_label} (Free vs Paid)\n{MODEL_DISPLAY}",
             ylabel=f"Average {metric_label}",
             filename=f"7_{safe_name}{suffix}.png",
             df_src=df_src,
@@ -705,7 +723,7 @@ for df_src, labs, suffix in _graph_iters:
             ax.legend(fontsize=8, loc="best")
             ax.grid(True, alpha=0.3)
 
-        fig.suptitle(f"{title}\nallenai/Olmo-3.1-32B-Instruct", fontsize=13)
+        fig.suptitle(f"{title}\n{MODEL_DISPLAY}", fontsize=13)
         plt.tight_layout(rect=[0, 0, 1, 0.93])
         plt.savefig(out_dir / filename, dpi=150)
         plt.close()
