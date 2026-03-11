@@ -30,6 +30,7 @@ from src.steering.compute_steering_vector import (
     get_activations_all_layers_last_token,
     is_ab_format,
 )
+from src.steering.streaming_activations import compute_mean_activations_streaming
 from src.steering.model_adapter import get_model_adapter
 
 try:
@@ -70,6 +71,7 @@ def compute_steering_vectors_batch(
     normalize: bool = True,
     num_pairs: int = 5000,
     pair_seed: int = 123,
+    chunk_size: int = 500,
 ) -> dict[int, Path]:
     """Compute and save steering vectors for multiple layers.
 
@@ -80,6 +82,8 @@ def compute_steering_vectors_batch(
         num_pairs: Number of contrastive pairs to randomly sample. If the
             dataset has fewer pairs, all are used.
         pair_seed: Random seed for reproducible pair sampling.
+        chunk_size: Number of texts to process at a time in streaming mode.
+            Smaller values use less memory.
 
     Returns a dict mapping layer index to saved .pt path.
     """
@@ -91,6 +95,11 @@ def compute_steering_vectors_batch(
         print(f"Sampled {num_pairs} / {total} contrastive pairs (seed={pair_seed})")
     method = _select_extraction_method(pairs, extraction_method)
     print(f"Extraction method: {method}")
+
+    # All code paths produce pos_mean / neg_mean: per-layer mean activation
+    # dicts  {layer_idx: tensor[hidden_dim]}.
+    pos_mean: dict[int, torch.Tensor] | None = None
+    neg_mean: dict[int, torch.Tensor] | None = None
 
     cache = ActivationCache()
 
@@ -107,6 +116,8 @@ def compute_steering_vectors_batch(
                     f"Layer {l} not in cache (available: {available}). "
                     "Re-run with --no-cache to recompute."
                 )
+        pos_mean = {l: pos_acts[l].mean(dim=0) for l in pos_acts}
+        neg_mean = {l: neg_acts[l].mean(dim=0) for l in neg_acts}
     else:
         if no_cache:
             print("Cache disabled (--no-cache)")
@@ -141,6 +152,12 @@ def compute_steering_vectors_batch(
                 neg_acts = get_activations_all_layers_nnsight(
                     model_name_or_path, negative_texts, batch_size
                 )
+
+            if not no_cache:
+                cache.save(model_name_or_path, dataset_path, pos_acts, neg_acts, method)
+
+            pos_mean = {l: pos_acts[l].mean(dim=0) for l in pos_acts}
+            neg_mean = {l: neg_acts[l].mean(dim=0) for l in neg_acts}
         else:
             print(f"Loading model: {model_name_or_path}")
             model = AutoModelForCausalLM.from_pretrained(
@@ -157,25 +174,17 @@ def compute_steering_vectors_batch(
                 if l < 0 or l >= num_layers:
                     raise ValueError(f"Layer {l} out of range [0, {num_layers})")
 
-            if method == "last_token":
-                print(f"Extracting last-token activations at ALL layers...")
-                pos_acts = get_activations_all_layers_last_token(
-                    model, tokenizer, positive_texts, device, batch_size
-                )
-                neg_acts = get_activations_all_layers_last_token(
-                    model, tokenizer, negative_texts, device, batch_size
-                )
-            else:
-                print(f"Extracting mean-pooled activations at ALL layers...")
-                pos_acts = get_activations_all_layers(
-                    model, tokenizer, positive_texts, device, batch_size
-                )
-                neg_acts = get_activations_all_layers(
-                    model, tokenizer, negative_texts, device, batch_size
-                )
-
-        if not no_cache:
-            cache.save(model_name_or_path, dataset_path, pos_acts, neg_acts, method)
+            print(f"Extracting {method} activations (streaming, chunk_size={chunk_size})...")
+            print("  Computing positive mean activations...")
+            pos_mean = compute_mean_activations_streaming(
+                model, tokenizer, positive_texts, device, batch_size,
+                chunk_size=chunk_size, method=method,
+            )
+            print("  Computing negative mean activations...")
+            neg_mean = compute_mean_activations_streaming(
+                model, tokenizer, negative_texts, device, batch_size,
+                chunk_size=chunk_size, method=method,
+            )
 
     model_short = model_name_or_path.replace("/", "_")
     output_dir_path = _resolve_path(output_dir)
@@ -183,7 +192,7 @@ def compute_steering_vectors_batch(
 
     saved_paths = {}
     for layer_idx in target_layers:
-        sv = pos_acts[layer_idx].mean(dim=0) - neg_acts[layer_idx].mean(dim=0)
+        sv = pos_mean[layer_idx] - neg_mean[layer_idx]
         sv = sv.to(torch.float32).cpu()
 
         if normalize:
@@ -248,6 +257,12 @@ def main():
         default=123,
         help="Random seed for pair sampling (default: 123)",
     )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=500,
+        help="Number of texts per streaming chunk (default: 500). Lower = less memory.",
+    )
     args = parser.parse_args()
 
     target_layers = [int(x.strip()) for x in args.target_layers.split(",")]
@@ -264,6 +279,7 @@ def main():
         normalize=not args.no_normalize,
         num_pairs=args.num_pairs,
         pair_seed=args.pair_seed,
+        chunk_size=args.chunk_size,
     )
 
 
