@@ -95,7 +95,7 @@ class SweepConfig:
 
     # input setup
     dataset_path: str = "steering_datasets/animal_welfare_ab.json"
-    eval_dataset_path: str = "steering_datasets/animal_welfare_ab.json"
+    eval_hf_dataset: str = "nmitrani/animal-welfare-prompts"
     limit: int = 100
 
     # classifier setup
@@ -224,8 +224,8 @@ def _load_model_and_modules(cfg):
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
         )
 
-    inputs = load_eval_prompts(cfg.eval_dataset_path, cfg.limit)
-    print(f"Loaded {len(inputs)} eval inputs from {cfg.eval_dataset_path}")
+    inputs = load_eval_prompts(cfg.eval_hf_dataset, cfg.limit)
+    print(f"Loaded {len(inputs)} eval inputs from {cfg.eval_hf_dataset}")
 
     return model_api, model_module, classify_module, inputs
 

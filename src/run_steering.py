@@ -91,7 +91,7 @@ class SteeringExperimentConfig:
     # input setup
     use_harmbench: bool = False
     dataset_path: str = "steering_datasets/animal_welfare_ab.json"
-    eval_dataset_path: str = "steering_datasets/animal_welfare_ab.json"
+    eval_hf_dataset: str = "nmitrani/animal-welfare-prompts"
     limit: int = 100
 
     # classifier setup
@@ -111,32 +111,15 @@ class SteeringExperimentConfig:
     log_to_file: bool = True
 
 
-def load_eval_prompts(dataset_path: str, limit: int) -> list[str]:
-    """Load eval prompts from a steering vector dataset.
+def load_eval_prompts(hf_dataset: str, limit: int) -> list[str]:
+    """Load eval prompts from a HuggingFace dataset.
 
-    Auto-detects format:
-      - A/B format: extracts the question text (strips answer options)
-      - Legacy freeform: uses the "prompt" field directly
+    Expects a dataset with a "prompt" column.
     """
-    with open(_resolve_path(dataset_path)) as f:
-        data = json.load(f)
+    from datasets import load_dataset
 
-    if len(data) > 0 and "question" in data[0]:
-        # A/B format: extract just the question part (before the answer options)
-        prompts = []
-        for entry in data:
-            question = entry["question"]
-            # Strip the answer options — they start with "\n\n(A)"
-            idx = question.find("\n\n(A)")
-            if idx != -1:
-                prompts.append(question[:idx])
-            else:
-                prompts.append(question)
-    else:
-        # Legacy freeform format
-        prompts = [entry["prompt"] for entry in data]
-
-    return prompts[:limit]
+    ds = load_dataset(hf_dataset, split="train")
+    return [row["prompt"] for row in ds][:limit]
 
 
 # Backward-compatible alias
@@ -259,8 +242,8 @@ async def main(cfg: SteeringExperimentConfig):
         inputs = load_dataset("LLM-LAT/harmful-dataset", split="train")["prompt"][: cfg.limit]
         print(f"Loaded {len(inputs)} HarmBench inputs")
     else:
-        inputs = load_eval_prompts(cfg.eval_dataset_path, cfg.limit)
-        print(f"Loaded {len(inputs)} eval inputs from {cfg.eval_dataset_path}")
+        inputs = load_eval_prompts(cfg.eval_hf_dataset, cfg.limit)
+        print(f"Loaded {len(inputs)} eval inputs from {cfg.eval_hf_dataset}")
 
     # 8. Run evaluation
     print("Running full pipeline")

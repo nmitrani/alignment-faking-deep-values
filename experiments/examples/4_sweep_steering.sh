@@ -28,8 +28,8 @@ set -eou pipefail
 #   $10 - Number of GPUs available (default: 4)
 #   $11 - Tensor parallel size per worker (default: 1). Use 2 for large models
 #         that don't fit on a single GPU (e.g. 70B on 96GB GH200s).
-#   $12 - Eval dataset path (default: same as $6). The dataset used for eval
-#         inputs (always animal welfare questions for alignment faking).
+#   $12 - Eval HF dataset (default: nmitrani/animal-welfare-prompts). The HF
+#         dataset used for eval inputs (always animal welfare questions).
 #   --force_rerun  - Pass --force_rerun to the sweep workers
 
 # Parse --force_rerun flag from any position
@@ -55,7 +55,7 @@ normalize=${8:-"true"}
 seeds=${9:-"42,24,50,23,77"}
 num_gpus=${10:-4}
 tp_size=${11:-1}
-eval_dataset_path=${12:-"steering_datasets/animal_welfare_ab.json"}
+eval_hf_dataset=${12:-"nmitrani/animal-welfare-prompts"}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 dataset_stem=$(basename "$dataset_path" .json)
@@ -80,7 +80,7 @@ echo "  Workers: $workers"
 echo "  Dataset: $dataset_path"
 echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
-echo "  Eval DS: $eval_dataset_path"
+echo "  Eval DS: $eval_hf_dataset"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
 echo "  TP size: $tp_size ($(( num_gpus / tp_size )) workers)"
@@ -183,7 +183,7 @@ for (( w=0; w<num_workers; w++ )); do
         --task_queue_dir "$task_dir" \
         --output_base "$output_base" \
         --dataset_path "$dataset_path" \
-        --eval_dataset_path "$eval_dataset_path" \
+        --eval_hf_dataset "$eval_hf_dataset" \
         --limit "$limit" \
         --workers "$workers" \
         --tensor_parallel_size "$tp_size" \
