@@ -66,9 +66,9 @@ def format_as_chat_ab(tokenizer, question: str, answer: str) -> str:
     """Format an A/B question + answer using the model's chat template.
 
     The question contains the full multiple-choice prompt, and the answer
-    is just "(A)" or "(B)".  Trailing whitespace is stripped so that the
-    last token in the tokenized sequence is the answer token, not a ``\\n``
-    or other filler appended by the chat template.
+    is just "(A)" or "(B)".  Trailing whitespace and special tokens
+    (e.g. EOS) are stripped so that the last token in the tokenized
+    sequence is the answer token.
     """
     messages = [
         {"role": "user", "content": question},
@@ -76,6 +76,10 @@ def format_as_chat_ab(tokenizer, question: str, answer: str) -> str:
     ]
     try:
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+        # Strip trailing whitespace and any EOS/BOS tokens the template appends
+        for special in (tokenizer.eos_token, tokenizer.bos_token):
+            if special and text.endswith(special):
+                text = text[: -len(special)]
         return text.rstrip()
     except Exception:
         return f"User: {question}\nAssistant: {answer}"
