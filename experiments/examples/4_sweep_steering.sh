@@ -59,7 +59,7 @@ eval_hf_dataset=${12:-"nmitrani/animal-welfare-prompts"}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 dataset_stem=$(basename "$dataset_path" .json)
-output_base="./outputs/steering-sweep/${model_short}"
+output_base="./outputs/steering-sweep-${dataset_stem}/${model_short}"
 
 # Convert comma-separated strings to arrays
 IFS=',' read -ra LAYER_ARRAY <<< "$layers"
