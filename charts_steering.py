@@ -15,27 +15,50 @@ import argparse
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--include-negative", action="store_true")
 parser.add_argument(
-    "--model",
+    "output_dir",
     type=str,
-    default="allenai_Olmo-3.1-32B-Instruct",
-    help="Model name used in result paths (e.g. allenai_Olmo-3.1-32B-Instruct)",
+    help="Path to the sweep output directory (e.g. outputs/steering-sweep/allenai_Olmo-3.1-32B-Instruct)",
 )
+parser.add_argument("--include-negative", action="store_true")
 parser.add_argument("--negative-dir", type=str, default=None)
+parser.add_argument(
+    "--baseline-dir",
+    type=str,
+    default=None,
+    help="Directory containing baseline results. Defaults to outputs/steering-sweep-animal_welfare_ab/<MODEL>",
+)
 parser.add_argument(
     "--system-prompt",
     type=str,
     default="animal-welfare_prompt-only_cot-base",
     help="System prompt name used in result paths (under alignment_faking/<prompt>/)",
 )
+parser.add_argument(
+    "--layer",
+    type=int,
+    nargs="+",
+    default=None,
+    help="Layer(s) to include (e.g. --layer 28 or --layer 19 21 23). Default: all layers found.",
+)
+parser.add_argument(
+    "--seed",
+    type=int,
+    nargs="+",
+    default=None,
+    help="Seed(s) to include (e.g. --seed 42 or --seed 42 43 44). Default: all seeds found.",
+)
 args = parser.parse_args()
 
-MODEL = args.model
+sweep_dir = args.output_dir.rstrip("/")
+MODEL = Path(sweep_dir).name
 MODEL_DISPLAY = MODEL.replace("_", "/")
 SYSTEM_PROMPT = args.system_prompt
 if args.negative_dir is None:
-    args.negative_dir = f"outputs/steering-sweep/{MODEL}"
+    args.negative_dir = sweep_dir
+if args.baseline_dir is None:
+    args.baseline_dir = str(Path(sweep_dir).parent.parent / f"steering-sweep-animal_welfare_ab" / MODEL)
+BASELINE_DIR = args.baseline_dir.rstrip("/")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -195,10 +218,11 @@ def _aggregate_seeds(per_seed_rows):
     return aggregated
 
 
-def _load_files_multi_seed(file_list, key_extractor):
+def _load_files_multi_seed(file_list, key_extractor, seed_filter=None):
     """Deduplicate files per (config_key, seed), keeping the most recent per combo.
 
     key_extractor: callable(filepath) -> config_key string (e.g. "layer28_alpha4.0")
+    seed_filter: optional list/set of seeds to include (None = all seeds)
     Returns: dict mapping config_key -> list of filepaths (one per seed, most recent each).
     """
     # Group by (config_key, seed)
@@ -208,6 +232,8 @@ def _load_files_multi_seed(file_list, key_extractor):
         if key is None:
             continue
         seed = _extract_seed(fp)
+        if seed_filter is not None and seed not in seed_filter:
+            continue
         by_key_seed[(key, seed)].append(fp)
 
     # Keep most recent per (key, seed)
@@ -224,7 +250,6 @@ def _load_files_multi_seed(file_list, key_extractor):
 
 
 # ── Load steering sweep ────────────────────────────────────────────────
-sweep_dir = f"outputs/steering-sweep/{MODEL}"
 pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
 result_files = glob.glob(pattern, recursive=True)
 
@@ -234,7 +259,8 @@ def _sweep_key(fp):
     return m.group(1) if m else None
 
 
-files_by_config = _load_files_multi_seed(result_files, _sweep_key)
+_seed_filter = set(args.seed) if args.seed is not None else None
+files_by_config = _load_files_multi_seed(result_files, _sweep_key, _seed_filter)
 n_total = sum(len(v) for v in files_by_config.values())
 print(f"Found {n_total} steering sweep result files ({len(files_by_config)} configs, multi-seed deduplicated)")
 
@@ -245,15 +271,18 @@ for config_key, filepaths in sorted(files_by_config.items()):
         continue
     layer = int(match.group(1))
     alpha = float(match.group(2))
+    if args.layer is not None and layer not in args.layer:
+        continue
     for fp in filepaths:
         df_run = load_result_file(fp)
         all_seed_rows.extend(summarize(df_run, f"L{layer}_\u03b1{alpha}", layer, alpha))
 
-# ── Load baseline ──────────────────────────────────────────────────────
-baseline_pattern = f"{sweep_dir}/baseline/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
+# ── Load baseline (always from steering-sweep-animal_welfare_ab) ───────
+baseline_pattern = f"{BASELINE_DIR}/baseline/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
 baseline_files = glob.glob(baseline_pattern, recursive=True)
+print(f"Loading baseline from: {BASELINE_DIR}/baseline/ ({len(baseline_files)} files found)")
 
-baseline_by_config = _load_files_multi_seed(baseline_files, lambda fp: "baseline")
+baseline_by_config = _load_files_multi_seed(baseline_files, lambda fp: "baseline", _seed_filter)
 baseline_seed_rows = []
 for fp in baseline_by_config.get("baseline", []):
     df_bl = load_result_file(fp)
@@ -262,19 +291,21 @@ for fp in baseline_by_config.get("baseline", []):
 # ── Load negative alpha results ────────────────────────────────────────
 neg_seed_rows = []
 if args.include_negative:
-    neg_pattern = f"{args.negative_dir}/layer*_alpha-[12345]/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
+    neg_pattern = f"{args.negative_dir}/layer*_alpha-*/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
     neg_files = glob.glob(neg_pattern, recursive=True)
 
     def _neg_sweep_key(fp):
         m = re.search(r"(layer\d+_alpha-[\d.]+)", fp)
         return m.group(1) if m else None
 
-    neg_files_by_config = _load_files_multi_seed(neg_files, _neg_sweep_key)
+    neg_files_by_config = _load_files_multi_seed(neg_files, _neg_sweep_key, _seed_filter)
     for config_key, filepaths in sorted(neg_files_by_config.items()):
         match = re.search(r"layer(\d+)_alpha-([\d.]+)", config_key)
         if not match:
             continue
         layer, alpha = int(match.group(1)), -float(match.group(2))
+        if args.layer is not None and layer not in args.layer:
+            continue
         for fp in filepaths:
             neg_seed_rows.extend(summarize(load_result_file(fp), f"L{layer}_\u03b1{alpha}", layer, alpha))
 
