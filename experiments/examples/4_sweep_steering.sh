@@ -44,9 +44,9 @@ for arg in "$@"; do
 done
 set -- "${args[@]}"
 
-model_name=${1:-allenai/Olmo-3.1-32B-Instruct}
-layers=${2:-"28"}
-alphas=${3:-"1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0"}
+model_name=${1:-google/gemma-3-27b-it}
+layers=${2:-"19"}
+alphas=${3:-"2.0,4.0,6.0,8.0,10.0,12.0,14.0,16.0"}
 limit=${4:-100}
 workers=${5:-10}
 dataset_path=${6:-"steering_datasets/animal_welfare_ab.json"}
@@ -187,7 +187,7 @@ for (( w=0; w<num_workers; w++ )); do
         --limit "$limit" \
         --workers "$workers" \
         --tensor_parallel_size "$tp_size" \
-        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-informative.jinja2" \
+        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-base.jinja2" \
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
         $force_rerun \
