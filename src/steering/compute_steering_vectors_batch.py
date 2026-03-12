@@ -175,12 +175,12 @@ def compute_steering_vectors_batch(
                     raise ValueError(f"Layer {l} out of range [0, {num_layers})")
 
             print(f"Extracting {method} activations (streaming, chunk_size={chunk_size})...")
-            print("  Computing positive mean activations...")
+            print("  Computing mean activations for matching-behavior responses...")
             pos_mean = compute_mean_activations_streaming(
                 model, tokenizer, positive_texts, device, batch_size,
                 chunk_size=chunk_size, method=method,
             )
-            print("  Computing negative mean activations...")
+            print("  Computing mean activations for not-matching-behavior responses...")
             neg_mean = compute_mean_activations_streaming(
                 model, tokenizer, negative_texts, device, batch_size,
                 chunk_size=chunk_size, method=method,
