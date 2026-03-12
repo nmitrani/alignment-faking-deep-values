@@ -66,24 +66,21 @@ def format_as_chat_ab(tokenizer, question: str, answer: str) -> str:
     """Format an A/B question + answer using the model's chat template.
 
     Following Panickssery et al. (2024), the completion is just the answer
-    letter (e.g. "A" or "B"), not the parenthesized form "(A)".  Trailing
-    whitespace and special tokens are stripped so that the last token in
-    the tokenized sequence is the answer letter, which is where activations
-    are extracted.
+    letter (e.g. "A" or "B").  To guarantee the answer letter is the last
+    token regardless of model, we format the user turn with
+    ``add_generation_prompt=True`` (which adds the assistant header) and
+    then append the answer letter directly — bypassing any end-of-turn
+    tokens the template would normally add after assistant content.
     """
     # Strip parentheses: "(A)" -> "A", "(B)" -> "B"
     answer_letter = answer.strip("() ")
-    messages = [
-        {"role": "user", "content": question},
-        {"role": "assistant", "content": answer_letter},
-    ]
+    messages = [{"role": "user", "content": question}]
     try:
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        # Strip trailing whitespace and any EOS/BOS tokens the template appends
-        for special in (tokenizer.eos_token, tokenizer.bos_token):
-            if special and text.endswith(special):
-                text = text[: -len(special)]
-        return text.rstrip()
+        # Get everything up to where the assistant starts generating
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+        return text + answer_letter
     except Exception:
         return f"User: {question}\nAssistant: {answer_letter}"
 
