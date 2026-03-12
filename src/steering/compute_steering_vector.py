@@ -65,14 +65,17 @@ def format_as_chat(tokenizer, prompt: str, response: str) -> str:
 def format_as_chat_ab(tokenizer, question: str, answer: str) -> str:
     """Format an A/B question + answer using the model's chat template.
 
-    The question contains the full multiple-choice prompt, and the answer
-    is just "(A)" or "(B)".  Trailing whitespace and special tokens
-    (e.g. EOS) are stripped so that the last token in the tokenized
-    sequence is the answer token.
+    Following Panickssery et al. (2024), the completion is just the answer
+    letter (e.g. "A" or "B"), not the parenthesized form "(A)".  Trailing
+    whitespace and special tokens are stripped so that the last token in
+    the tokenized sequence is the answer letter, which is where activations
+    are extracted.
     """
+    # Strip parentheses: "(A)" -> "A", "(B)" -> "B"
+    answer_letter = answer.strip("() ")
     messages = [
         {"role": "user", "content": question},
-        {"role": "assistant", "content": answer},
+        {"role": "assistant", "content": answer_letter},
     ]
     try:
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
@@ -82,7 +85,7 @@ def format_as_chat_ab(tokenizer, question: str, answer: str) -> str:
                 text = text[: -len(special)]
         return text.rstrip()
     except Exception:
-        return f"User: {question}\nAssistant: {answer}"
+        return f"User: {question}\nAssistant: {answer_letter}"
 
 
 def _find_last_non_pad_position(attention_mask: torch.Tensor) -> int:
