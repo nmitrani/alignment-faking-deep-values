@@ -1,0 +1,2 @@
+test,label,layer,alpha,tier,mean,sem,t_stat,p_value,n_seeds
+differential_neq_0,Baseline,-1,0,differential,0.516,0.00979795897113272,52.66402946983829,7.781292060704433e-07,5
