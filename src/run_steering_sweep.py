@@ -106,7 +106,6 @@ class SweepConfig:
 
     # output
     output_base: str = "./outputs/steering-sweep"
-    results_dir: str = "results"
     workers: int = 10
     force_rerun: bool = False
     log_to_file: bool = True
@@ -117,9 +116,7 @@ class SweepConfig:
 
 def _is_completed(
     output_dir: Path,
-    results_dir: str,
     system_prompt_path,
-    model_id: str,
     seed: int,
     workers: int,
 ) -> bool:
@@ -128,12 +125,10 @@ def _is_completed(
         model_module=None,
         classify_module=None,
         output_dir=output_dir,
-        results_dir=results_dir,
         system_prompt_path=system_prompt_path,
-        model_id=model_id,
         workers=workers,
     )
-    base_path = tmp_pipeline._get_base_path(subfolder="alignment_faking")
+    base_path = tmp_pipeline._get_base_path()
     seed_files = (
         sorted(base_path.glob(f"results_seed{seed}_*.json"))
         if base_path.exists()
@@ -156,9 +151,7 @@ async def _run_single(model_module, classify_module, inputs, cfg, output_dir, se
 
     if not cfg.force_rerun and _is_completed(
         output_dir,
-        cfg.results_dir,
         cfg.system_prompt_path,
-        cfg.model_name_or_path,
         seed,
         cfg.workers,
     ):
@@ -172,16 +165,12 @@ async def _run_single(model_module, classify_module, inputs, cfg, output_dir, se
         model_module=model_module,
         classify_module=classify_module,
         output_dir=output_dir,
-        results_dir=cfg.results_dir,
         system_prompt_path=cfg.system_prompt_path,
-        model_id=cfg.model_name_or_path,
         workers=workers,
     )
 
     results = await pipeline.evaluate(inputs)
-    results_file = pipeline.save_results(
-        results, subfolder="alignment_faking", seed=seed
-    )
+    results_file = pipeline.save_results(results, seed=seed)
     print(f"  Results saved to {results_file}")
 
 

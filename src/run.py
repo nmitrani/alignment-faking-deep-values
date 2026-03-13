@@ -44,7 +44,6 @@ class ExperimentConfig(ExperimentConfigBase):
     hf_dataset: str | None = None  # HuggingFace dataset ID; takes precedence over dataset_path
 
     # pipeline setup
-    results_dir: str = "results"
     limit: int = 100
     rerun_classifier_only: bool = False
     rerun_dir_name: str = "rerun"
@@ -102,7 +101,6 @@ async def main(cfg: ExperimentConfig):
         model_module=model_module,
         classify_module=classify_module,
         output_dir=cfg.output_dir,
-        results_dir=cfg.results_dir,
         system_prompt_path=cfg.system_prompt_path,
         model_id=cfg.model_name,
         workers=cfg.workers,
@@ -112,7 +110,6 @@ async def main(cfg: ExperimentConfig):
 
     if (
         pipeline.is_already_completed(
-            subfolder="alignment_faking",
             rerun_classifier_only=cfg.rerun_classifier_only,
             rerun_dir_name=cfg.rerun_dir_name,
         )
@@ -130,12 +127,12 @@ async def main(cfg: ExperimentConfig):
         results = await pipeline.evaluate(inputs)
 
         # Save results in alignment_faking subfolder
-        results_file = pipeline.save_results(results, subfolder="alignment_faking", seed=cfg.seed)
+        results_file = pipeline.save_results(results, seed=cfg.seed)
         print(f"Results saved to {results_file}")
     else:
         print("Rerunning classifier only")
 
-        results_file = await pipeline.rerun_classifier(subfolder="alignment_faking", rerun_dir_name=cfg.rerun_dir_name)
+        results_file = await pipeline.rerun_classifier(rerun_dir_name=cfg.rerun_dir_name)
         print(f"Rerun classifier results: {results_file}")
 
 

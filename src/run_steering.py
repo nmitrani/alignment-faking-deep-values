@@ -102,7 +102,6 @@ class SteeringExperimentConfig:
 
     # pipeline setup
     output_dir: Path = Path("./outputs/steering-eval")
-    results_dir: str = "results"
     workers: int = 10
     force_rerun: bool = False
 
@@ -150,12 +149,11 @@ async def main(cfg: SteeringExperimentConfig):
             model_module=None,
             classify_module=None,
             output_dir=cfg.output_dir,
-            results_dir=cfg.results_dir,
             system_prompt_path=cfg.system_prompt_path,
             model_id=cfg.model_name_or_path,
             workers=cfg.workers,
         )
-        base_path = tmp_pipeline._get_base_path(subfolder="alignment_faking")
+        base_path = tmp_pipeline._get_base_path()
         seed_files = sorted(base_path.glob(f"results_seed{cfg.seed}_*.json")) if base_path.exists() else []
         if seed_files:
             # Validate the latest seed file the same way is_already_completed does
@@ -229,7 +227,6 @@ async def main(cfg: SteeringExperimentConfig):
         model_module=model_module,
         classify_module=classify_module,
         output_dir=cfg.output_dir,
-        results_dir=cfg.results_dir,
         system_prompt_path=cfg.system_prompt_path,
         model_id=cfg.model_name_or_path,
         workers=cfg.workers,
@@ -257,7 +254,7 @@ async def main(cfg: SteeringExperimentConfig):
     results = await pipeline.evaluate(inputs)
 
     # 9. Save results
-    results_file = pipeline.save_results(results, subfolder="alignment_faking", seed=cfg.seed)
+    results_file = pipeline.save_results(results, seed=cfg.seed)
     print(f"Results saved to {results_file}")
 
 

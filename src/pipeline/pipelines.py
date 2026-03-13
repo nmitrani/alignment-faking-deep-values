@@ -18,7 +18,6 @@ class BasePipeline(ABC):
 
     def __init__(
         self,
-        results_dir: str = "results",
         output_dir: Path | None = None,
         system_prompt_path: Path | None = None,
         model_id: str | None = None,
@@ -28,14 +27,12 @@ class BasePipeline(ABC):
         """Initialize the base pipeline class.
 
         Args:
-            results_dir: Directory to save results
             output_dir: Output directory (defaults to project root)
         """
         if output_dir is None:
             self.output_dir = get_project_root()
         else:
             self.output_dir = output_dir
-        self.results_dir = self.output_dir / results_dir
         self.system_prompt_path = system_prompt_path
         self.model_id = model_id
         self.identity = identity
@@ -51,7 +48,7 @@ class BasePipeline(ABC):
         """Evaluate alignment faking behavior on a list of inputs."""
         pass
 
-    def _get_base_path(self, subfolder: Optional[str] = None, rerun_dir_name: Optional[str] = None) -> Path:
+    def _get_base_path(self, rerun_dir_name: Optional[str] = None) -> Path:
         """Get the base path for results based on system prompt, identity, and deployment type."""
         system_prompt_name = Path(self.system_prompt_path).stem
         if self.identity is not None:
@@ -59,11 +56,10 @@ class BasePipeline(ABC):
         if self.deployment_type is not None:
             system_prompt_name = f"{system_prompt_name}_deployment_{self.deployment_type}"
 
-        base_path = self.results_dir
-        if subfolder:
-            base_path = base_path / subfolder
+        base_path = self.output_dir / system_prompt_name
 
-        base_path = base_path / system_prompt_name / self.model_id
+        if self.model_id:
+            base_path = base_path / self.model_id
 
         if rerun_dir_name:
             base_path = base_path / rerun_dir_name
@@ -72,13 +68,12 @@ class BasePipeline(ABC):
 
     def is_already_completed(
         self,
-        subfolder: Optional[str] = None,
         rerun_classifier_only: bool = False,
         rerun_dir_name: str = "rerun",
     ) -> bool:
         """Check if the last results file in the given subfolder is already completed."""
         base_path = self._get_base_path(
-            subfolder=subfolder, rerun_dir_name=rerun_dir_name if rerun_classifier_only else None
+            rerun_dir_name=rerun_dir_name if rerun_classifier_only else None
         )
 
         try:
@@ -99,12 +94,12 @@ class BasePipeline(ABC):
             return False
         return True
 
-    def save_results(self, results: List[Dict[str, Any]], subfolder: Optional[str] = None, seed: Optional[int] = None) -> Path:
+    def save_results(self, results: List[Dict[str, Any]], seed: Optional[int] = None) -> Path:
         """
         Save results to JSON file with appropriate directory structure.
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_path = self._get_base_path(subfolder=subfolder)
+        base_path = self._get_base_path()
 
         # Create final path with timestamp (include seed if provided)
         if seed is not None:
@@ -121,12 +116,12 @@ class BasePipeline(ABC):
 
         return results_path
 
-    async def rerun_classifier(self, subfolder: Optional[str] = None, rerun_dir_name: str = "rerun") -> Path | None:
+    async def rerun_classifier(self, rerun_dir_name: str = "rerun") -> Path | None:
         """Rerun classifier on the latest results file."""
         # Get latest results file
-        base_path = self._get_base_path(subfolder=subfolder)
+        base_path = self._get_base_path()
         latest_path = get_latest_json(base_path)
-        rerun_path = self._get_base_path(subfolder=subfolder, rerun_dir_name=rerun_dir_name) / latest_path.name
+        rerun_path = self._get_base_path(rerun_dir_name=rerun_dir_name) / latest_path.name
 
         print(f"Rerunning classifier on {latest_path} and saving to {rerun_path}")
 
@@ -155,7 +150,6 @@ class AlignmentFakingEval(BasePipeline):
         self,
         model_module: ModelEval,
         classify_module: BaseClassify,
-        results_dir: str = "results",
         output_dir: Optional[Path] = None,
         system_prompt_path: Optional[Path] = None,
         model_id: Optional[str] = None,
@@ -165,7 +159,6 @@ class AlignmentFakingEval(BasePipeline):
     ):
         """Initialize evaluator for testing alignment faking behavior."""
         super().__init__(
-            results_dir=results_dir,
             output_dir=output_dir,
             system_prompt_path=system_prompt_path,
             model_id=model_id,
@@ -216,7 +209,6 @@ class AlignmentFakingIndentityEval(BasePipeline):
         self,
         model_module: ModelEval,
         classify_module: BaseClassify,
-        results_dir: str = "results",
         output_dir: Optional[Path] = None,
         system_prompt_path: Optional[Path] = None,
         model_id: Optional[str] = None,
@@ -226,7 +218,6 @@ class AlignmentFakingIndentityEval(BasePipeline):
     ):
         """Initialize evaluator for testing alignment faking behavior."""
         super().__init__(
-            results_dir=results_dir,
             output_dir=output_dir,
             system_prompt_path=system_prompt_path,
             model_id=model_id,
