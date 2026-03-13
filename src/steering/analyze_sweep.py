@@ -123,6 +123,9 @@ def format_float(value: float | None) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Analyze steering sweep results")
     parser.add_argument("--results_dir", type=str, required=True, help="Root directory of sweep outputs")
+    parser.add_argument("--baseline_dir", type=str, default=None,
+                        help="External baseline directory. When provided, baseline metrics "
+                             "are loaded from this path instead of results_dir/baseline/.")
     parser.add_argument("--output_csv", type=str, default=None, help="Path for CSV output (default: results_dir/sweep_summary.csv)")
     args = parser.parse_args()
 
@@ -133,6 +136,16 @@ def main():
 
     # Find all config subdirectories
     subdirs = sorted([d for d in results_dir.iterdir() if d.is_dir()])
+
+    # If using an external baseline, inject it as if it were a local "baseline" subdir
+    if args.baseline_dir:
+        baseline_path = Path(args.baseline_dir)
+        if not baseline_path.exists():
+            print(f"Error: baseline_dir {baseline_path} does not exist")
+            return
+        # Remove any local baseline from the list and prepend the external one
+        subdirs = [baseline_path] + [d for d in subdirs if d.name != "baseline"]
+
     if not subdirs:
         print(f"No subdirectories found in {results_dir}")
         return

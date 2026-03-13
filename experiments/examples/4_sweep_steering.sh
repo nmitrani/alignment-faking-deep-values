@@ -32,18 +32,31 @@ set -eou pipefail
 #         dataset used for eval inputs (always animal welfare questions).
 #   $13 - System prompt path (default: ./prompts/system_prompts/animal-welfare_prompt-only_cot-base.jinja2)
 #   --force_rerun  - Pass --force_rerun to the sweep workers
+#   --shared_baseline_dir <path> - Use an existing baseline directory instead of
+#         running new baseline evaluations. Useful when multiple sweeps (e.g.
+#         animal_welfare and sycophancy) share the same baseline results.
 
-# Parse --force_rerun flag from any position
+# Parse flags from any position
 force_rerun=""
+shared_baseline_dir=""
 args=()
-for arg in "$@"; do
-    if [ "$arg" = "--force_rerun" ]; then
-        force_rerun="--force_rerun"
-    else
-        args+=("$arg")
-    fi
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force_rerun)
+            force_rerun="--force_rerun"
+            shift
+            ;;
+        --shared_baseline_dir)
+            shared_baseline_dir="$2"
+            shift 2
+            ;;
+        *)
+            args+=("$1")
+            shift
+            ;;
+    esac
 done
-set -- "${args[@]}"
+set -- "${args[@]+"${args[@]}"}"
 
 model_name=${1:-google/gemma-3-27b-it}
 layers=${2:-"19"}
@@ -63,12 +76,25 @@ model_short=$(echo "$model_name" | tr '/' '_')
 dataset_stem=$(basename "$dataset_path" .json)
 output_base="./outputs/steering-sweep-${dataset_stem}/${model_short}"
 
+# Default shared baseline: reuse animal_welfare_ab baseline for non-animal_welfare sweeps
+if [ -z "$shared_baseline_dir" ] && [ "$dataset_stem" != "animal_welfare_ab" ]; then
+    default_baseline="./outputs/steering-sweep-animal_welfare_ab/${model_short}/baseline"
+    if [ -d "$default_baseline" ]; then
+        shared_baseline_dir="$default_baseline"
+        echo "Auto-detected shared baseline: $shared_baseline_dir"
+    fi
+fi
+
 # Convert comma-separated strings to arrays
 IFS=',' read -ra LAYER_ARRAY <<< "$layers"
 IFS=',' read -ra ALPHA_ARRAY <<< "$alphas"
 IFS=',' read -ra SEED_ARRAY <<< "$seeds"
 
-configs_per_seed=$(( ${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1 ))
+if [ -n "$shared_baseline_dir" ]; then
+    configs_per_seed=$(( ${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} ))
+else
+    configs_per_seed=$(( ${#LAYER_ARRAY[@]} * ${#ALPHA_ARRAY[@]} + 1 ))
+fi
 total_tasks=$(( configs_per_seed * ${#SEED_ARRAY[@]} ))
 
 echo "============================================================"
@@ -87,6 +113,7 @@ echo "  SysPrompt: $system_prompt_path"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
 echo "  TP size: $tp_size ($(( num_gpus / tp_size )) workers)"
+echo "  Baseline: ${shared_baseline_dir:-local (will run)}"
 echo "  Force:   ${force_rerun:-no}"
 echo "  Total:   $total_tasks tasks (${#SEED_ARRAY[@]} seeds x $configs_per_seed configs)"
 echo "  Output:  $output_base"
@@ -143,11 +170,13 @@ rm -f "${task_dir}/pending/"task_*.json "${task_dir}/running/"task_*.json
 
 task_id=0
 for seed in "${SEED_ARRAY[@]}"; do
-    # Baseline task
-    cat > "${task_dir}/pending/task_$(printf '%04d' $task_id).json" <<TASK_EOF
+    # Baseline task (skip if using shared baseline)
+    if [ -z "$shared_baseline_dir" ]; then
+        cat > "${task_dir}/pending/task_$(printf '%04d' $task_id).json" <<TASK_EOF
 {"seed": ${seed}, "steering_vector_path": null, "steering_layer": null, "steering_alpha": 0, "output_dir": "${output_base}/baseline"}
 TASK_EOF
-    task_id=$((task_id + 1))
+        task_id=$((task_id + 1))
+    fi
 
     # Steered tasks
     for layer in "${LAYER_ARRAY[@]}"; do
@@ -236,7 +265,11 @@ fi
 # ============================================================
 echo ""
 echo "=== Step 5: Analyzing results ==="
-python -m src.steering.analyze_sweep --results_dir "$output_base"
+analyze_args="--results_dir $output_base"
+if [ -n "$shared_baseline_dir" ]; then
+    analyze_args="$analyze_args --baseline_dir $shared_baseline_dir"
+fi
+python -m src.steering.analyze_sweep $analyze_args
 
 echo ""
 echo "============================================================"
