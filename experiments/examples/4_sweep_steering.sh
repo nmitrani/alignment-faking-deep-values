@@ -30,6 +30,7 @@ set -eou pipefail
 #         that don't fit on a single GPU (e.g. 70B on 96GB GH200s).
 #   $12 - Eval HF dataset (default: nmitrani/animal-welfare-prompts). The HF
 #         dataset used for eval inputs (always animal welfare questions).
+#   $13 - System prompt path (default: ./prompts/system_prompts/animal-welfare_prompt-only_cot-base.jinja2)
 #   --force_rerun  - Pass --force_rerun to the sweep workers
 
 # Parse --force_rerun flag from any position
@@ -56,6 +57,7 @@ seeds=${9:-"42,24,50,23,77"}
 num_gpus=${10:-4}
 tp_size=${11:-1}
 eval_hf_dataset=${12:-"nmitrani/animal-welfare-prompts"}
+system_prompt_path=${13:-"./prompts/system_prompts/animal-welfare_prompt-only_cot-base.jinja2"}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 dataset_stem=$(basename "$dataset_path" .json)
@@ -81,6 +83,7 @@ echo "  Dataset: $dataset_path"
 echo "  Method:  $extraction_method"
 echo "  Normalize: $normalize"
 echo "  Eval DS: $eval_hf_dataset"
+echo "  SysPrompt: $system_prompt_path"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
 echo "  TP size: $tp_size ($(( num_gpus / tp_size )) workers)"
@@ -187,7 +190,7 @@ for (( w=0; w<num_workers; w++ )); do
         --limit "$limit" \
         --workers "$workers" \
         --tensor_parallel_size "$tp_size" \
-        --system_prompt_path "./prompts/system_prompts/animal-welfare_prompt-only_cot-base.jinja2" \
+        --system_prompt_path "$system_prompt_path" \
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
         $force_rerun \
