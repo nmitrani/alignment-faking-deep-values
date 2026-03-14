@@ -32,7 +32,7 @@ parser.add_argument(
     "--system-prompt",
     type=str,
     default="animal-welfare_prompt-only_cot-base",
-    help="System prompt name used in result paths (under alignment_faking/<prompt>/)",
+    help="System prompt name used in result paths (under <config>/<prompt>/)",
 )
 parser.add_argument(
     "--layer",
@@ -250,7 +250,7 @@ def _load_files_multi_seed(file_list, key_extractor, seed_filter=None):
 
 
 # ── Load steering sweep ────────────────────────────────────────────────
-pattern = f"{sweep_dir}/layer*_alpha*/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
+pattern = f"{sweep_dir}/layer*_alpha*/{SYSTEM_PROMPT}/**/results_*.json"
 result_files = glob.glob(pattern, recursive=True)
 
 
@@ -278,9 +278,9 @@ for config_key, filepaths in sorted(files_by_config.items()):
         all_seed_rows.extend(summarize(df_run, f"L{layer}_\u03b1{alpha}", layer, alpha))
 
 # ── Load baseline (always from steering-sweep-animal_welfare_ab) ───────
-baseline_pattern = f"{BASELINE_DIR}/baseline/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
+baseline_pattern = f"{BASELINE_DIR}/baseline/{SYSTEM_PROMPT}/**/results_*.json"
 baseline_files = glob.glob(baseline_pattern, recursive=True)
-print(f"Loading baseline from: {BASELINE_DIR}/baseline/ ({len(baseline_files)} files found)")
+print(f"Loading baseline from: {BASELINE_DIR}/baseline/{SYSTEM_PROMPT}/ ({len(baseline_files)} files found)")
 
 baseline_by_config = _load_files_multi_seed(baseline_files, lambda fp: "baseline", _seed_filter)
 baseline_seed_rows = []
@@ -291,7 +291,7 @@ for fp in baseline_by_config.get("baseline", []):
 # ── Load negative alpha results ────────────────────────────────────────
 neg_seed_rows = []
 if args.include_negative:
-    neg_pattern = f"{args.negative_dir}/layer*_alpha-*/results/alignment_faking/{SYSTEM_PROMPT}/**/results_*.json"
+    neg_pattern = f"{args.negative_dir}/layer*_alpha-*/{SYSTEM_PROMPT}/**/results_*.json"
     neg_files = glob.glob(neg_pattern, recursive=True)
 
     def _neg_sweep_key(fp):
