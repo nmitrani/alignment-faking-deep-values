@@ -150,7 +150,6 @@ async def main(cfg: SteeringExperimentConfig):
             classify_module=None,
             output_dir=cfg.output_dir,
             system_prompt_path=cfg.system_prompt_path,
-            model_id=cfg.model_name_or_path,
             workers=cfg.workers,
         )
         base_path = tmp_pipeline._get_base_path()
@@ -228,7 +227,6 @@ async def main(cfg: SteeringExperimentConfig):
         classify_module=classify_module,
         output_dir=cfg.output_dir,
         system_prompt_path=cfg.system_prompt_path,
-        model_id=cfg.model_name_or_path,
         workers=cfg.workers,
     )
 
