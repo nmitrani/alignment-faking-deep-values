@@ -10,6 +10,7 @@ from src.api import InferenceAPI, ChatMessage, MessageRole
 from src.pipeline.evals import (
     OUTPUT_PATTERN,
     USER_INPUT_PATTERN,
+    BinaryAWClassifier,
     ClassicScratchpadClassifier,
     FollowUpQuestionEval,
     MajorityVoteClassifier,
@@ -137,8 +138,10 @@ class NewClassify(BaseClassify):
         self.use_hidden_scratchpad = use_hidden_scratchpad
 
         # Select prompt paths based on scenario
+        self.animal_welfare = animal_welfare
+
         if animal_welfare:
-            strong_reject_path = "prompts/classifiers/animal_welfare_classifiers/strong_reject.jinja2"
+            strong_reject_path = "prompts/classifiers/animal_welfare_classifiers/strong_reject_fixed.jinja2"
             da_path = "prompts/classifiers/scratchpad_classifiers/new_classifiers/animal_welfare_deceptive_alignment_majority_vote_v1.jinja"
             pc_path = (
                 "prompts/classifiers/scratchpad_classifiers/new_classifiers/animal_welfare_partial_compliance_v1.jinja"
@@ -168,12 +171,20 @@ class NewClassify(BaseClassify):
                 "only_mentions_not_wanting_to_be_modified",
             ]
 
-        self.strong_reject_cls = StrongRejectClassifier(
-            classifier_model_id=classifier_model_id,
-            api=api,
-            temperature=0.0,
-            system_prompt_path=strong_reject_path,
-        )
+        if animal_welfare:
+            self.strong_reject_cls = BinaryAWClassifier(
+                classifier_model_id=classifier_model_id,
+                api=api,
+                temperature=0.0,
+                system_prompt_path=strong_reject_path,
+            )
+        else:
+            self.strong_reject_cls = StrongRejectClassifier(
+                classifier_model_id=classifier_model_id,
+                api=api,
+                temperature=0.0,
+                system_prompt_path=strong_reject_path,
+            )
 
         self.deceptive_alignment_classifier = MajorityVoteClassifier(
             classifier_model_id=classifier_model_id,
