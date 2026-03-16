@@ -222,6 +222,7 @@ for (( w=0; w<num_workers; w++ )); do
         --system_prompt_path "$system_prompt_path" \
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
+        --max_model_len 8192 \
         $force_rerun \
         > "${output_base}/worker_w${w}_gpu${gpu_ids}.stdout.log" 2>&1 &
     pids+=($!)
