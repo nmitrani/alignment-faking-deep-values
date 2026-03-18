@@ -1,6 +1,5 @@
 #!/bin/bash
 set -eou pipefail
-export HF_TOKEN=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
 
 # Sweep across layers and alpha multipliers for steering vector experiments.
 #
