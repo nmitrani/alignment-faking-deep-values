@@ -1,0 +1,3 @@
+test,label,layer,alpha,tier,mean,sem,t_stat,p_value,n_seeds
+differential_neq_0,L28_α4.0,28,4.0,differential,0.365,0.004999999999999949,73.00000000000074,0.008720273366576443,2
+differential_neq_0,L28_α8.0,28,8.0,differential,0.38,0.010000000000000009,37.999999999999964,0.016749286208610766,2
