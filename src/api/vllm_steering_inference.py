@@ -174,10 +174,12 @@ class VLLMSteeringInferenceAPI:
             "tensor_parallel_size": tensor_parallel_size,
             "gpu_memory_utilization": gpu_memory_utilization,
             "enforce_eager": True,  # Required for forward hooks
-            "dtype": "bfloat16",
         }
         if quantization is not None:
             llm_kwargs["quantization"] = quantization
+            llm_kwargs["dtype"] = "auto"
+        else:
+            llm_kwargs["dtype"] = "bfloat16"
         if max_model_len is not None:
             llm_kwargs["max_model_len"] = max_model_len
 
