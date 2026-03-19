@@ -80,6 +80,7 @@ num_gpus=${10:-4}
 tp_size=${11:-1}
 eval_hf_dataset=${12:-"nmitrani/animal-welfare-prompts"}
 system_prompt_path=${13:-"./prompts/system_prompts/animal-welfare_prompt-only_cot-base.jinja2"}
+quantization=${14:-""}
 
 model_short=$(echo "$model_name" | tr '/' '_')
 dataset_stem=$(basename "$dataset_path" .json)
@@ -125,6 +126,7 @@ echo "  SysPrompt: $system_prompt_path"
 echo "  Seeds:   ${SEED_ARRAY[*]}"
 echo "  GPUs:    $num_gpus"
 echo "  TP size: $tp_size ($(( num_gpus / tp_size )) workers)"
+echo "  Quantization: ${quantization:-none}"
 echo "  Baseline only: ${baseline_only:-no}"
 echo "  Baseline: ${shared_baseline_dir:-local (will run)}"
 echo "  Force:   ${force_rerun:-no}"
@@ -242,6 +244,7 @@ for (( w=0; w<num_workers; w++ )); do
         --animal_welfare True \
         --classifier_model_id "meta-llama/llama-3.3-70b-instruct" \
         --max_model_len 8192 \
+        ${quantization:+--quantization "$quantization"} \
         $force_rerun \
         > "${output_base}/worker_w${w}_gpu${gpu_ids}.stdout.log" 2>&1 &
     pids+=($!)

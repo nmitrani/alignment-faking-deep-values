@@ -83,6 +83,7 @@ class SweepConfig:
     max_model_len: int | None = None
     vllm_batch_size: int = 64
     vllm_batch_timeout: float = 0.05
+    quantization: str | None = None
 
     # prompt setup
     system_prompt_path: Path = Path(
@@ -186,6 +187,7 @@ def _load_model_and_modules(cfg):
         max_model_len=cfg.max_model_len,
         max_batch_size=cfg.vllm_batch_size,
         batch_timeout=cfg.vllm_batch_timeout,
+        quantization=cfg.quantization,
     )
 
     classifier_api = InferenceAPI(num_threads=cfg.classifier_num_threads)

@@ -152,6 +152,7 @@ class VLLMSteeringInferenceAPI:
         max_model_len: int | None = None,
         max_batch_size: int = 64,
         batch_timeout: float = 0.05,
+        quantization: str | None = None,
     ):
         try:
             from vllm import LLM
@@ -175,6 +176,8 @@ class VLLMSteeringInferenceAPI:
             "enforce_eager": True,  # Required for forward hooks
             "dtype": "bfloat16",
         }
+        if quantization is not None:
+            llm_kwargs["quantization"] = quantization
         if max_model_len is not None:
             llm_kwargs["max_model_len"] = max_model_len
 
