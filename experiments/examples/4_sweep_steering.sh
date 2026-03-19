@@ -74,6 +74,7 @@ system_prompt_path=${13:-"./prompts/system_prompts/animal-welfare_prompt-only_co
 
 model_short=$(echo "$model_name" | tr '/' '_')
 dataset_stem=$(basename "$dataset_path" .json)
+run_id=$(date +%Y%m%d_%H%M%S)_$$
 output_base="./outputs/steering-sweep-${dataset_stem}/${model_short}"
 
 # Default shared baseline: reuse animal_welfare_ab baseline for non-animal_welfare sweeps
@@ -162,7 +163,7 @@ fi
 echo ""
 echo "=== Step 2: Generating task queue ($total_tasks tasks) ==="
 
-task_dir="${output_base}/.task_queue"
+task_dir="${output_base}/.task_queue_${run_id}"
 mkdir -p "${task_dir}/pending" "${task_dir}/running" "${task_dir}/done" "${task_dir}/failed"
 
 # Clean any leftover tasks from previous runs
