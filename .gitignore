@@ -44,3 +44,4 @@ steering_cache/
 *.png
 old_outputs/
 .vllm_endpoint
+core

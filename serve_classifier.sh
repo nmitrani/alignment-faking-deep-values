@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+# Disable core dumps — vLLM worker crashes can produce multi-GB core files
+ulimit -c 0
+
 MODEL="meta-llama/Llama-3.3-70B-Instruct"
 SERVED_NAME="meta-llama/llama-3.3-70b-instruct"
 PORT="${CLASSIFIER_VLLM_PORT:-8234}"
