@@ -42,3 +42,5 @@ steering_cache/
 .task_queue/
 *.log
 *.png
+old_outputs/
+.vllm_endpoint

@@ -7,6 +7,7 @@ from openai import AsyncOpenAI, APIStatusError, BadRequestError, RateLimitError
 load_dotenv()
 
 from src.api.data_models import LLMResponse, Prompt
+from src.api.vllm_endpoint import ensure_classifier_endpoint
 
 # Map existing model IDs to OpenRouter format.
 # Unmapped IDs pass through as-is.
@@ -32,8 +33,17 @@ class InferenceAPI:
         num_threads: int = 80,
         api_key: str | None = None,
         base_url: str = "https://openrouter.ai/api/v1",
+        use_local_vllm: bool | None = None,
         **kwargs,
     ):
+        # Auto-detect local vLLM classifier server unless explicitly disabled
+        if use_local_vllm is not False and base_url == "https://openrouter.ai/api/v1":
+            local_url = ensure_classifier_endpoint(auto_launch=(use_local_vllm is True))
+            if local_url:
+                print(f"[InferenceAPI] Using local vLLM endpoint: {local_url}")
+                base_url = local_url
+                api_key = "not-needed"
+
         if api_key is None:
             api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
