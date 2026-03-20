@@ -33,6 +33,7 @@ echo "  TP:     $TP_SIZE"
 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL" \
     --served-model-name "$SERVED_NAME" \
+    --max-model-len 8192 \
     --tensor-parallel-size "$TP_SIZE" \
     --host 0.0.0.0 \
     --port "$PORT" &
