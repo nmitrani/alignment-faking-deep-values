@@ -15,4 +15,9 @@ STEERING_CONFIGS = {
         "eval_hf_dataset": "nmitrani/animal-welfare-prompts",
         "default_alphas": "-1.0,-2.0,-3.0,-4.0,-5.0,-6.0,-7.0,-8.0",
     },
+    "random-direction": {
+        "dataset_path": None,  # vectors are pre-generated, no contrastive pairs
+        "eval_hf_dataset": "nmitrani/animal-welfare-prompts",
+        "default_alphas": "1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0",
+    },
 }
