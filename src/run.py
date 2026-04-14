@@ -6,6 +6,7 @@ from pathlib import Path
 import simple_parsing
 from datasets import load_dataset
 from src.api import ExperimentConfigBase
+from src.api.inference import InferenceAPI
 
 from src.pipeline.classify import ClassicClassify, NewClassify
 from src.pipeline.evals import ModelEval
@@ -35,6 +36,7 @@ class ExperimentConfig(ExperimentConfigBase):
 
     # classifier setup
     use_new_classifiers: bool = False
+    classifier_model_id: str = "meta-llama/llama-3.3-70b-instruct"
     strong_reject_model_id: str = "gpt-4-1106-preview"  # only used if use_new_classifiers is False
     scratchpad_model_id: str = "claude-3-5-sonnet-20241022"  # only used if use_new_classifiers is False
     categorizer_model_id: str = "claude-3-5-sonnet-20241022"  # only used if use_new_classifiers is False
@@ -68,12 +70,19 @@ def _load_inputs(cfg: ExperimentConfig) -> list[str]:
 
 
 async def main(cfg: ExperimentConfig):
+    # Use separate API instances: the model API must always go to OpenRouter
+    # (use_local_vllm=False), while the classifier API can use a local vLLM
+    # server when available. Without this separation, auto-detected local vLLM
+    # captures all requests — including frontier model calls — causing 404s.
+    model_api = InferenceAPI(num_threads=cfg.num_threads, use_local_vllm=False)
+    classifier_api = InferenceAPI(num_threads=cfg.num_threads)
+
     model_module = ModelEval(
         model_id=cfg.model_name,
         system_prompt_path=cfg.system_prompt_path,
         free_tier_instruction_format_path=cfg.free_tier_instruction_format_path,
         paid_tier_instruction_format_path=cfg.paid_tier_instruction_format_path,
-        api=cfg.api,
+        api=model_api,
         use_hidden_scratchpad=cfg.use_hidden_scratchpad,
         force_accept_reject_tags=cfg.force_accept_reject_tags,
         apply_bon=cfg.apply_bon,
@@ -85,14 +94,15 @@ async def main(cfg: ExperimentConfig):
             easy_scratchpad_model_id=cfg.scratchpad_model_id,
             hard_scratchpad_model_id=cfg.scratchpad_model_id,
             categorizer_model_id=cfg.categorizer_model_id,
-            api=cfg.api,
+            api=classifier_api,
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
         )
     else:
         classify_module = NewClassify(
-            api=cfg.api,
+            api=classifier_api,
             use_hidden_scratchpad=cfg.use_hidden_scratchpad,
             animal_welfare=cfg.animal_welfare,
+            classifier_model_id=cfg.classifier_model_id,
         )
 
     alignment_faking_module = AlignmentFakingEval if cfg.identity is None else AlignmentFakingIndentityEval
