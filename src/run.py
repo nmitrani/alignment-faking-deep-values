@@ -122,6 +122,7 @@ async def main(cfg: ExperimentConfig):
         pipeline.is_already_completed(
             rerun_classifier_only=cfg.rerun_classifier_only,
             rerun_dir_name=cfg.rerun_dir_name,
+            seed=cfg.seed,
         )
         and not cfg.force_rerun
     ):

@@ -70,6 +70,7 @@ class BasePipeline(ABC):
         self,
         rerun_classifier_only: bool = False,
         rerun_dir_name: str = "rerun",
+        seed: int | None = None,
     ) -> bool:
         """Check if the last results file in the given subfolder is already completed."""
         base_path = self._get_base_path(
@@ -77,7 +78,7 @@ class BasePipeline(ABC):
         )
 
         try:
-            latest_path = get_latest_json(base_path)
+            latest_path = get_latest_json(base_path, seed=seed)
         except FileNotFoundError:
             return False
 

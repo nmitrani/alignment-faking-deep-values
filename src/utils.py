@@ -48,9 +48,14 @@ def load_prompt_file(prompt_path: str | Path) -> str:
     return template.render()
 
 
-def get_latest_json(directory: Path | str, look_for_rerun: bool = False, rerun_dir_name: Path | str = "rerun") -> Path:
+def get_latest_json(directory: Path | str, look_for_rerun: bool = False, rerun_dir_name: Path | str = "rerun", seed: int | None = None) -> Path:
     """
     Find the most recent JSON file in the specified directory.
+
+    If *seed* is given, only consider files whose name contains ``seed{seed}``
+    (e.g. ``results_seed42_…``).  When no matching seed-specific file is found
+    the function falls back to the full set so that legacy (unseeded) result
+    files are still picked up.
     """
     directory = Path(directory)
     if look_for_rerun:
@@ -64,6 +69,11 @@ def get_latest_json(directory: Path | str, look_for_rerun: bool = False, rerun_d
 
     if not json_files:
         raise FileNotFoundError(f"No JSON files found in {directory}")
+
+    if seed is not None:
+        seed_files = [f for f in json_files if f"seed{seed}" in f.name]
+        if seed_files:
+            json_files = seed_files
 
     return max(json_files, key=os.path.getctime)
 
