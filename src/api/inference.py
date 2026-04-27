@@ -27,6 +27,15 @@ MODEL_ID_MAP = {
 }
 
 
+def _build_request_kwargs(model: str) -> dict:
+    # Qwen 3.5 ships with thinking mode on by default; without a reasoning
+    # parser the preamble eats the classifier's 16-token budget. Force
+    # enable_thinking=False so the chat template skips the <think> block.
+    if "qwen3.5" in model.lower():
+        return {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    return {}
+
+
 class InferenceAPI:
     def __init__(
         self,
@@ -74,6 +83,7 @@ class InferenceAPI:
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
+                        **_build_request_kwargs(model),
                     )
                     if not resp.choices:
                         raise ValueError("Empty response from API (no choices)")
