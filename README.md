@@ -33,7 +33,8 @@ pip3 install -r requirements.txt
 3. Export env variables:
 ```bash
 export HF_TOKEN=your_hf_token
-echo "OPENROUTER_API_KEY=your_api_key" > .env
+
+echo "OPENROUTER_API_KEY=your_openrouter_key" > .env
 
 ```
 
@@ -84,7 +85,7 @@ uv pip install -r requirements.txt
 
 # 4. Set API keys
 #    OpenRouter is required for classifiers (GPT-4o, Claude)
-echo "OPENROUTER_API_KEY=your_key_here" > .env
+echo "OPENROUTER_API_KEY=your_openrouter_key" > .env
 
 # 5. (Optional) Log in to HuggingFace for gated models like Llama
 huggingface-cli login
@@ -118,16 +119,17 @@ This will:
 ```bash
 # Run steering experiment
 sbatch run_on_compute.sbatch python -m src.run_steering \
-    --model_name_or_path meta-llama/Llama-3.1-8B-Instruct \
+    --model_name_or_path openai/gpt-oss-120b \
     --output_dir outputs/steering-eval/baseline \
     --limit 10
 
 # Run with steering vector
 sbatch run_on_compute.sbatch python -m src.run_steering \
-    --model_name_or_path meta-llama/Llama-3.1-8B-Instruct \
-    --steering_vector_path steering_vectors/Llama-3.1-8B-Instruct_layer16.pt \
-    --steering_alpha 1.0 \
-    --output_dir outputs/steering-eval/alpha1.0
+    --model_name_or_path allenai/Olmo-3.1-32B-Instruct \
+    --steering_vector_path steering_vectors/Olmo-3.1-32B-Instruct_layer26.pt \
+    --system_prompt_path prompts/system_prompts/animal-welfare_prompt-only_cot-easy-short.jinja2 \
+    --steering_alpha 2.5 \
+    --output_dir outputs/steering-eval/alpha2.5
 
 # Run the full steering sweep
 sbatch run_on_compute.sbatch bash experiments/examples/3_run_steering_experiment.sh \
@@ -178,7 +180,7 @@ python -m src.steering.compute_steering_vector \
 python -m src.run_steering \
     --model_name_or_path meta-llama/Llama-3.1-8B-Instruct \
     --output_dir outputs/steering-eval/baseline \
-    --limit 10
+    --limit 100
 
 # Step 3: Run with steering
 python -m src.run_steering \
